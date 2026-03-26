@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFallbackPlayers, type FallbackPlayer } from '@/data/pslSquads';
+import { TeamPreview } from '@/components/TeamPreview';
 
 
 type PlayerRole = 'BAT' | 'BOWL' | 'AR' | 'WK';
@@ -84,6 +85,7 @@ const MatchDetail = () => {
   const [roleFilter, setRoleFilter] = useState<PlayerRole | 'ALL'>('ALL');
   const [usingFallback, setUsingFallback] = useState(false);
   const [syncDone, setSyncDone] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
   // Fetch match data
   const { data: match } = useQuery({
@@ -241,6 +243,7 @@ const MatchDetail = () => {
     onSuccess: () => {
       toast.success('Team saved successfully! 🏏');
       queryClient.invalidateQueries({ queryKey: ['user-team', id] });
+      setShowPreview(true);
     },
     onError: (error: any) => toast.error(error.message),
   });
@@ -428,9 +431,18 @@ const MatchDetail = () => {
           </div>
         )}
 
-        {/* Save Button */}
+        {/* Preview & Save Buttons */}
         {!isLocked && (
-          <div className="sticky bottom-20 z-10">
+          <div className="sticky bottom-20 z-10 space-y-2">
+            {isValid && (
+              <Button
+                onClick={() => setShowPreview(true)}
+                variant="outline"
+                className="w-full font-display font-bold text-base py-5 border-primary/30 text-primary"
+              >
+                👁️ Preview Team
+              </Button>
+            )}
             <Button
               onClick={() => saveMutation.mutate()}
               disabled={!isValid || saveMutation.isPending}
@@ -439,6 +451,16 @@ const MatchDetail = () => {
               {saveMutation.isPending ? 'Saving...' : `Save Team (${selected.size}/11)`}
             </Button>
           </div>
+        )}
+
+        {/* Team Preview Overlay */}
+        {showPreview && (
+          <TeamPreview
+            players={selectedPlayers}
+            captainId={captain}
+            viceCaptainId={viceCaptain}
+            onClose={() => setShowPreview(false)}
+          />
         )}
       </div>
     </Layout>
