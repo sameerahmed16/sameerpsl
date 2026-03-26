@@ -1,13 +1,27 @@
 import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Layout } from '@/components/Layout';
 import { PlayerCard } from '@/components/PlayerCard';
-import { MATCHES, PLAYERS, Player, PlayerRole } from '@/data/mockData';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Filter } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+
+type PlayerRole = 'BAT' | 'BOWL' | 'AR' | 'WK';
+
+interface Player {
+  id: string;
+  name: string;
+  team: string;
+  role: PlayerRole;
+  credits: number;
+  points: number;
+  is_playing: boolean | null;
+}
 
 const BUDGET = 100;
 const MAX_PER_TEAM = 7;
@@ -17,26 +31,81 @@ const ROLE_CONSTRAINTS: Record<PlayerRole, [number, number]> = {
   AR: [1, 4],
   BOWL: [3, 6],
 };
-
 const ROLE_FILTERS: (PlayerRole | 'ALL')[] = ['ALL', 'WK', 'BAT', 'AR', 'BOWL'];
+
+const ROLE_COLORS: Record<PlayerRole, string> = {
+  BAT: 'bg-secondary text-secondary-foreground',
+  BOWL: 'bg-primary text-primary-foreground',
+  AR: 'bg-accent text-accent-foreground',
+  WK: 'bg-destructive text-destructive-foreground',
+};
 
 const MatchDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const match = MATCHES.find(m => m.id === id);
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [captain, setCaptain] = useState<string | null>(null);
   const [viceCaptain, setViceCaptain] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<PlayerRole | 'ALL'>('ALL');
 
-  const allPlayers = useMemo(() => {
-    if (!match) return [];
-    return [
-      ...(PLAYERS[match.teamA] || []),
-      ...(PLAYERS[match.teamB] || []),
-    ];
-  }, [match]);
+  const { data: match } = useQuery({
+    queryKey: ['match', id],
+    queryFn: async () => {
+      const { data, error } = await supabase.from('matches').select('*').eq('id', id!).single();
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const { data: allPlayers = [] } = useQuery({
+    queryKey: ['match-players', id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('match_players')
+        .select('player_id, players(*)')
+        .eq('match_id', id!);
+      if (error) throw error;
+      return (data || []).map(mp => mp.players).filter(Boolean) as Player[];
+    },
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (!user || !id || !captain || !viceCaptain) throw new Error('Missing data');
+      
+      // Upsert user team
+      const { data: team, error: teamError } = await supabase
+        .from('user_teams')
+        .upsert({
+          user_id: user.id,
+          match_id: id,
+          captain_id: captain,
+          vice_captain_id: viceCaptain,
+        }, { onConflict: 'user_id,match_id' })
+        .select()
+        .single();
+      if (teamError) throw teamError;
+
+      // Delete existing team players and re-insert
+      await supabase.from('team_players').delete().eq('user_team_id', team.id);
+      
+      const { error: playersError } = await supabase
+        .from('team_players')
+        .insert(Array.from(selected).map(playerId => ({
+          user_team_id: team.id,
+          player_id: playerId,
+        })));
+      if (playersError) throw playersError;
+    },
+    onSuccess: () => {
+      toast.success('Team saved successfully! 🏏');
+      queryClient.invalidateQueries({ queryKey: ['user-team', id] });
+    },
+    onError: (error: any) => toast.error(error.message),
+  });
 
   const filteredPlayers = useMemo(() => {
     if (roleFilter === 'ALL') return allPlayers;
@@ -44,7 +113,7 @@ const MatchDetail = () => {
   }, [allPlayers, roleFilter]);
 
   const selectedPlayers = useMemo(() => allPlayers.filter(p => selected.has(p.id)), [allPlayers, selected]);
-  const usedCredits = selectedPlayers.reduce((sum, p) => sum + p.credits, 0);
+  const usedCredits = selectedPlayers.reduce((sum, p) => sum + Number(p.credits), 0);
   const remainingCredits = BUDGET - usedCredits;
 
   const roleCounts = useMemo(() => {
@@ -59,12 +128,12 @@ const MatchDetail = () => {
     return counts;
   }, [selectedPlayers]);
 
-  if (!match) return <Layout><p className="text-center text-muted-foreground pt-10">Match not found</p></Layout>;
+  if (!match) return <Layout><p className="text-center text-muted-foreground pt-10">Loading...</p></Layout>;
 
   const canSelect = (player: Player) => {
     if (selected.has(player.id)) return true;
     if (selected.size >= 11) return false;
-    if (player.credits > remainingCredits) return false;
+    if (Number(player.credits) > remainingCredits) return false;
     if ((teamCounts[player.team] || 0) >= MAX_PER_TEAM) return false;
     if (roleCounts[player.role] >= ROLE_CONSTRAINTS[player.role][1]) return false;
     return true;
@@ -96,14 +165,6 @@ const MatchDetail = () => {
   const isValid = selected.size === 11 && captain && viceCaptain &&
     Object.entries(ROLE_CONSTRAINTS).every(([role, [min]]) => roleCounts[role as PlayerRole] >= min);
 
-  const handleSave = () => {
-    if (!isValid) {
-      toast.error('Complete your team first!');
-      return;
-    }
-    toast.success('Team saved successfully! 🏏');
-  };
-
   return (
     <Layout>
       <div className="space-y-4 pt-4">
@@ -111,17 +172,15 @@ const MatchDetail = () => {
           <ArrowLeft className="w-4 h-4" /> Back
         </button>
 
-        {/* Match header */}
         <div className="gradient-card rounded-xl border border-border p-4 text-center">
           <p className="text-xs text-muted-foreground mb-1">{match.venue}</p>
           <div className="flex items-center justify-center gap-4">
-            <span className="font-display font-bold text-foreground">{match.teamALogo}</span>
+            <span className="font-display font-bold text-foreground">{match.team_a_logo}</span>
             <span className="text-xs text-muted-foreground">vs</span>
-            <span className="font-display font-bold text-foreground">{match.teamBLogo}</span>
+            <span className="font-display font-bold text-foreground">{match.team_b_logo}</span>
           </div>
         </div>
 
-        {/* Budget bar */}
         <div className="gradient-card rounded-lg border border-border p-3">
           <div className="flex justify-between text-sm mb-2">
             <span className="text-muted-foreground">Players: <span className="text-foreground font-display font-bold">{selected.size}/11</span></span>
@@ -139,7 +198,6 @@ const MatchDetail = () => {
           </div>
         </div>
 
-        {/* Role filter */}
         <div className="flex gap-2 items-center">
           <Filter className="w-4 h-4 text-muted-foreground" />
           {ROLE_FILTERS.map(r => (
@@ -156,12 +214,12 @@ const MatchDetail = () => {
           ))}
         </div>
 
-        {/* Players */}
         <div className="space-y-2">
           {filteredPlayers.map(player => (
             <PlayerCard
               key={player.id}
               player={player}
+              roleColors={ROLE_COLORS}
               selected={selected.has(player.id)}
               isCaptain={captain === player.id}
               isViceCaptain={viceCaptain === player.id}
@@ -173,14 +231,13 @@ const MatchDetail = () => {
           ))}
         </div>
 
-        {/* Save button */}
         <div className="sticky bottom-20 z-10">
           <Button
-            onClick={handleSave}
-            disabled={!isValid}
+            onClick={() => saveMutation.mutate()}
+            disabled={!isValid || saveMutation.isPending}
             className="w-full gradient-primary text-primary-foreground font-display font-bold text-base py-6 shadow-glow disabled:opacity-40"
           >
-            Save Team ({selected.size}/11)
+            {saveMutation.isPending ? 'Saving...' : `Save Team (${selected.size}/11)`}
           </Button>
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { Home, Trophy, Users, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
 
 const NAV_ITEMS = [
   { path: '/', label: 'Matches', icon: Home },
@@ -11,6 +12,8 @@ const NAV_ITEMS = [
 
 export const Navbar = () => {
   const location = useLocation();
+  const { user } = useAuth();
+  const initial = user?.email?.[0]?.toUpperCase() || 'U';
   
   return (
     <>
@@ -22,7 +25,7 @@ export const Navbar = () => {
             <span className="text-gradient-gold ml-1">PSL</span>
           </Link>
           <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-display font-bold text-foreground">
-            U
+            {initial}
           </div>
         </div>
       </header>

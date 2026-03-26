@@ -1,10 +1,22 @@
-import { Player, ROLE_COLORS } from '@/data/mockData';
 import { Badge } from '@/components/ui/badge';
 import { Check, X, Minus, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+type PlayerRole = 'BAT' | 'BOWL' | 'AR' | 'WK';
+
+interface Player {
+  id: string;
+  name: string;
+  team: string;
+  role: PlayerRole;
+  credits: number;
+  points: number;
+  is_playing: boolean | null;
+}
+
 interface PlayerCardProps {
   player: Player;
+  roleColors: Record<PlayerRole, string>;
   selected?: boolean;
   isCaptain?: boolean;
   isViceCaptain?: boolean;
@@ -16,6 +28,7 @@ interface PlayerCardProps {
 
 export const PlayerCard = ({
   player,
+  roleColors,
   selected = false,
   isCaptain = false,
   isViceCaptain = false,
@@ -24,9 +37,9 @@ export const PlayerCard = ({
   onViceCaptain,
   disabled = false,
 }: PlayerCardProps) => {
-  const playingIcon = player.isPlaying === true 
+  const playingIcon = player.is_playing === true 
     ? <Check className="w-3.5 h-3.5 text-primary" />
-    : player.isPlaying === false 
+    : player.is_playing === false 
     ? <X className="w-3.5 h-3.5 text-destructive" />
     : <Minus className="w-3.5 h-3.5 text-muted-foreground" />;
 
@@ -52,10 +65,10 @@ export const PlayerCard = ({
 
         <div className="flex items-center gap-2 shrink-0">
           {playingIcon}
-          <Badge className={cn("text-[10px] px-1.5 py-0.5", ROLE_COLORS[player.role])}>
+          <Badge className={cn("text-[10px] px-1.5 py-0.5", roleColors[player.role])}>
             {player.role}
           </Badge>
-          <span className="text-sm font-display font-bold text-secondary">{player.credits}</span>
+          <span className="text-sm font-display font-bold text-secondary">{Number(player.credits)}</span>
         </div>
       </div>
 
