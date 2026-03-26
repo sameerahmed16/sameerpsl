@@ -14,6 +14,7 @@ const rankStyles: Record<number, string> = {
 
 const Leaderboard = () => {
   const [selectedMatch, setSelectedMatch] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: matches = [] } = useQuery({
     queryKey: ['leaderboard-matches'],

@@ -320,17 +320,30 @@ const MatchDetail = () => {
       if (!user || !id || !captain || !viceCaptain) throw new Error('Missing data');
       if (isLocked) throw new Error('Team is locked');
 
-      if (usingFallback) {
-        const playersToInsert = allPlayers.filter(p => selected.has(p.id));
-        for (const p of playersToInsert) {
-          await supabase.from('players').upsert({
-            id: p.id, name: p.name, team: p.team, role: p.role, credits: p.credits, points: 0,
-          }, { onConflict: 'id' });
-          await supabase.from('match_players').upsert({
-            match_id: id, player_id: p.id,
-          }, { onConflict: 'match_id,player_id' }).select();
+      // Always upsert players by name+team to get real DB IDs
+      const playersToSave = allPlayers.filter(p => selected.has(p.id));
+      const idMap = new Map<string, string>(); // old fallback ID -> real DB ID
+
+      for (const p of playersToSave) {
+        const { data: upserted } = await supabase.from('players').upsert(
+          { name: p.name, team: p.team, role: p.role, credits: p.credits, points: p.points || 0 },
+          { onConflict: 'name,team' }
+        ).select('id').single();
+
+        if (upserted) {
+          idMap.set(p.id, upserted.id);
+          // Link to match_players
+          await supabase.from('match_players').upsert(
+            { match_id: id, player_id: upserted.id },
+            { onConflict: 'match_id,player_id' }
+          );
         }
       }
+
+      // Remap captain/viceCaptain to real DB IDs
+      const realCaptain = idMap.get(captain!) || captain!;
+      const realViceCaptain = idMap.get(viceCaptain!) || viceCaptain!;
+      const realSelectedIds = Array.from(selected).map(sid => idMap.get(sid) || sid);
 
       const { data: team, error: teamError } = await supabase
         .from('user_teams')
