@@ -8,19 +8,6 @@ const corsHeaders = {
 
 const CRICAPI_BASE = "https://api.cricapi.com/v1";
 
-// PSL 2026 team IDs from CricAPI
-const PSL_SERIES_ID = "d61c8caf-7de4-4a10-997a-2b97e7ee5a7c"; // PSL 2026
-
-const TEAM_ABBRS: Record<string, string> = {
-  "Lahore Qalandars": "LQ",
-  "Karachi Kings": "KK",
-  "Islamabad United": "IU",
-  "Peshawar Zalmi": "PZ",
-  "Quetta Gladiators": "QG",
-  "Multan Sultans": "MS",
-};
-
-// Role mapping from CricAPI
 function mapRole(role: string): "BAT" | "BOWL" | "AR" | "WK" {
   const r = (role || "").toLowerCase();
   if (r.includes("wk") || r.includes("keeper")) return "WK";
@@ -29,7 +16,6 @@ function mapRole(role: string): "BAT" | "BOWL" | "AR" | "WK" {
   return "BAT";
 }
 
-// Default credits by role
 function defaultCredits(role: string): number {
   switch (role) {
     case "WK": return 8.5;
@@ -38,6 +24,12 @@ function defaultCredits(role: string): number {
     case "BAT": return 8.5;
     default: return 8.0;
   }
+}
+
+async function apiFetch(url: string): Promise<any> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`API returned ${resp.status}`);
+  return resp.json();
 }
 
 Deno.serve(async (req) => {
@@ -54,12 +46,11 @@ Deno.serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     const body = await req.json().catch(() => ({}));
-    const matchId = body.match_id; // optional: sync players for specific match
+    const matchId = body.match_id;
 
     let totalPlayers = 0;
     let matchesProcessed = 0;
 
-    // Get matches to sync players for
     let matchQuery = supabase
       .from("matches")
       .select("id, external_id, team_a, team_b")
@@ -68,7 +59,6 @@ Deno.serve(async (req) => {
     if (matchId) {
       matchQuery = matchQuery.eq("id", matchId);
     } else {
-      // Only sync upcoming/live matches
       matchQuery = matchQuery.in("status", ["upcoming", "live"]);
     }
 
@@ -80,7 +70,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Get existing players
     const { data: existingPlayers } = await supabase
       .from("players")
       .select("id, external_id");
@@ -93,9 +82,7 @@ Deno.serve(async (req) => {
       if (!match.external_id) continue;
 
       try {
-        // Fetch squad/match info from CricAPI
-        const data = await fetchViaDb(
-          supabase,
+        const data = await apiFetch(
           `${CRICAPI_BASE}/match_squad?apikey=${encodeURIComponent(CRICAPI_KEY)}&id=${match.external_id}`
         );
 
@@ -118,7 +105,6 @@ Deno.serve(async (req) => {
               : null;
 
             if (playerMap.has(extId)) {
-              // Update existing player
               const playerId = playerMap.get(extId)!;
               await supabase
                 .from("players")
@@ -131,7 +117,6 @@ Deno.serve(async (req) => {
                 .eq("id", playerId);
               matchPlayerIds.push(playerId);
             } else {
-              // Insert new player
               const { data: newPlayer } = await supabase
                 .from("players")
                 .insert({
@@ -155,15 +140,12 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Link players to match
         if (matchPlayerIds.length > 0) {
-          // Remove existing links
           await supabase
             .from("match_players")
             .delete()
             .eq("match_id", match.id);
 
-          // Insert new links
           await supabase
             .from("match_players")
             .insert(
@@ -173,13 +155,6 @@ Deno.serve(async (req) => {
               }))
             );
         }
-
-        // Update lock_time to match_date if not set
-        await supabase
-          .from("matches")
-          .update({ lock_time: match.external_id ? undefined : new Date().toISOString() })
-          .eq("id", match.id)
-          .is("lock_time", null);
 
         matchesProcessed++;
       } catch (matchErr) {
@@ -200,9 +175,3 @@ Deno.serve(async (req) => {
     });
   }
 });
-
-async function fetchViaDb(supabase: ReturnType<typeof createClient>, url: string): Promise<any> {
-  const { data, error } = await supabase.rpc("http_get_json", { target_url: url });
-  if (error) throw new Error(`Database HTTP fetch failed: ${error.message}`);
-  return data as any;
-}
