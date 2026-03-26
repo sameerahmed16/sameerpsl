@@ -24,7 +24,7 @@ Deno.serve(async (req) => {
     // Get live matches from our DB
     const { data: liveMatches } = await supabase
       .from("matches")
-      .select("id, team_a, team_b, team_a_logo, team_b_logo")
+      .select("id, external_id, team_a, team_b, team_a_logo, team_b_logo")
       .eq("status", "live");
 
     if (!liveMatches?.length) {
@@ -37,10 +37,12 @@ Deno.serve(async (req) => {
     let updated = 0;
 
     for (const match of liveMatches) {
+      const extId = match.external_id;
+      if (!extId) continue;
+
       try {
-        // Fetch match info/scorecard from CricAPI
         const res = await fetch(
-          `${CRICAPI_BASE}/match_info?apikey=${CRICAPI_KEY}&id=${match.id}`
+          `${CRICAPI_BASE}/match_info?apikey=${CRICAPI_KEY}&id=${extId}`
         );
         if (!res.ok) continue;
 
@@ -75,62 +77,65 @@ Deno.serve(async (req) => {
 
         // Update player stats from scorecard
         const scorecardRes = await fetch(
-          `${CRICAPI_BASE}/match_scorecard?apikey=${CRICAPI_KEY}&id=${match.id}`
+          `${CRICAPI_BASE}/match_scorecard?apikey=${CRICAPI_KEY}&id=${extId}`
         );
         if (scorecardRes.ok) {
           const scData = await scorecardRes.json();
           if (scData.status === "success" && scData.data?.scorecard) {
             for (const innings of scData.data.scorecard) {
-              // Update batting stats
               for (const bat of innings.batting || []) {
                 if (bat.batsman?.id) {
                   const points = calculateBattingPoints(bat);
-                  await supabase
+                  const { data: existingPlayer } = await supabase
                     .from("players")
-                    .update({
-                      points,
-                      is_playing: true,
-                    })
-                    .eq("id", bat.batsman.id);
+                    .select("id")
+                    .eq("external_id", bat.batsman.id)
+                    .maybeSingle();
+
+                  if (existingPlayer) {
+                    await supabase
+                      .from("players")
+                      .update({ points, is_playing: true })
+                      .eq("id", existingPlayer.id);
+                  }
                 }
               }
-              // Update bowling stats
               for (const bowl of innings.bowling || []) {
                 if (bowl.bowler?.id) {
                   const points = calculateBowlingPoints(bowl);
-                  // Add to existing points
-                  const { data: existing } = await supabase
+                  const { data: existingPlayer } = await supabase
                     .from("players")
-                    .select("points")
-                    .eq("id", bowl.bowler.id)
-                    .single();
+                    .select("id, points")
+                    .eq("external_id", bowl.bowler.id)
+                    .maybeSingle();
 
-                  await supabase
-                    .from("players")
-                    .update({
-                      points: (existing?.points || 0) + points,
-                      is_playing: true,
-                    })
-                    .eq("id", bowl.bowler.id);
+                  if (existingPlayer) {
+                    await supabase
+                      .from("players")
+                      .update({
+                        points: (existingPlayer.points || 0) + points,
+                        is_playing: true,
+                      })
+                      .eq("id", existingPlayer.id);
+                  }
                 }
               }
-              // Update catches/run-outs from fielding
               for (const field of innings.catching || []) {
                 if (field.catcher?.id) {
                   const catchPoints = (field.catches || 0) * 8 + (field.runOut || 0) * 12;
                   if (catchPoints > 0) {
-                    const { data: existing } = await supabase
+                    const { data: existingPlayer } = await supabase
                       .from("players")
-                      .select("points")
-                      .eq("id", field.catcher.id)
-                      .single();
+                      .select("id, points")
+                      .eq("external_id", field.catcher.id)
+                      .maybeSingle();
 
-                    await supabase
-                      .from("players")
-                      .update({
-                        points: (existing?.points || 0) + catchPoints,
-                      })
-                      .eq("id", field.catcher.id);
+                    if (existingPlayer) {
+                      await supabase
+                        .from("players")
+                        .update({ points: (existingPlayer.points || 0) + catchPoints })
+                        .eq("id", existingPlayer.id);
+                    }
                   }
                 }
               }
@@ -163,12 +168,7 @@ function calculateBattingPoints(bat: any): number {
   const fours = bat.b4 || 0;
   const sixes = bat.b6 || 0;
   const balls = bat.b || 1;
-
-  let points = runs; // 1 point per run
-  points += fours; // +1 for boundary
-  points += sixes * 2; // +2 for six
-
-  // Strike rate bonus (T20)
+  let points = runs + fours + sixes * 2;
   const sr = (runs / balls) * 100;
   if (balls >= 10) {
     if (sr > 170) points += 6;
@@ -177,15 +177,10 @@ function calculateBattingPoints(bat: any): number {
     else if (sr < 50) points -= 6;
     else if (sr < 60) points -= 4;
   }
-
-  // Milestone bonuses
   if (runs >= 100) points += 16;
   else if (runs >= 50) points += 8;
   else if (runs >= 30) points += 4;
-
-  // Duck penalty
   if (runs === 0 && bat.out) points -= 2;
-
   return points;
 }
 
@@ -193,15 +188,10 @@ function calculateBowlingPoints(bowl: any): number {
   const wickets = bowl.w || 0;
   const overs = bowl.o || 0;
   const runs = bowl.r || 0;
-
-  let points = wickets * 25; // 25 per wicket
-
-  // Wicket haul bonuses
+  let points = wickets * 25;
   if (wickets >= 5) points += 16;
   else if (wickets >= 4) points += 8;
   else if (wickets >= 3) points += 4;
-
-  // Economy bonus (T20)
   if (overs >= 2) {
     const economy = runs / overs;
     if (economy < 5) points += 6;
@@ -211,9 +201,6 @@ function calculateBowlingPoints(bowl: any): number {
     else if (economy > 11) points -= 4;
     else if (economy > 10) points -= 2;
   }
-
-  // Maiden over
   points += (bowl.maiden || 0) * 12;
-
   return points;
 }

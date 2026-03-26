@@ -21,7 +21,7 @@ Deno.serve(async (req) => {
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Step 1: Fetch current/recent matches from CricAPI
+    // Step 1: Fetch current matches from CricAPI
     const matchesRes = await fetch(
       `${CRICAPI_BASE}/currentMatches?apikey=${CRICAPI_KEY}&offset=0`
     );
@@ -37,13 +37,12 @@ Deno.serve(async (req) => {
     // Filter PSL matches
     const pslMatches = (matchesData.data || []).filter(
       (m: any) =>
-        m.series_id &&
-        (m.name?.toLowerCase().includes("psl") ||
-          m.name?.toLowerCase().includes("pakistan super league") ||
-          m.series_id?.toLowerCase().includes("psl"))
+        m.name?.toLowerCase().includes("psl") ||
+        m.name?.toLowerCase().includes("pakistan super league") ||
+        m.series_id?.toLowerCase().includes("psl")
     );
 
-    // Also fetch series list to find PSL series ID
+    // Also try series endpoint
     const seriesRes = await fetch(
       `${CRICAPI_BASE}/series?apikey=${CRICAPI_KEY}&offset=0`
     );
@@ -60,7 +59,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // If we found a PSL series, fetch its matches too
+    // Fetch series matches if found
     let seriesMatches: any[] = [];
     if (pslSeriesId) {
       const seriesInfoRes = await fetch(
@@ -74,7 +73,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Combine and deduplicate
+    // Combine and deduplicate by CricAPI id
     const allMatches = [...pslMatches];
     for (const sm of seriesMatches) {
       if (sm.id && !allMatches.find((m: any) => m.id === sm.id)) {
@@ -82,28 +81,21 @@ Deno.serve(async (req) => {
       }
     }
 
-    const upsertedMatches: any[] = [];
+    let matchesSynced = 0;
 
     for (const m of allMatches) {
+      const externalId = m.id;
+      if (!externalId) continue;
+
       const teams = (m.teams || []) as string[];
       const teamA = teams[0] || m.teamInfo?.[0]?.name || "TBD";
       const teamB = teams[1] || m.teamInfo?.[1]?.name || "TBD";
       const teamALogo =
         m.teamInfo?.[0]?.shortname ||
-        teamA
-          .split(" ")
-          .map((w: string) => w[0])
-          .join("")
-          .slice(0, 3)
-          .toUpperCase();
+        teamA.split(" ").map((w: string) => w[0]).join("").slice(0, 3).toUpperCase();
       const teamBLogo =
         m.teamInfo?.[1]?.shortname ||
-        teamB
-          .split(" ")
-          .map((w: string) => w[0])
-          .join("")
-          .slice(0, 3)
-          .toUpperCase();
+        teamB.split(" ").map((w: string) => w[0]).join("").slice(0, 3).toUpperCase();
 
       let status = "upcoming";
       if (m.matchStarted && !m.matchEnded) status = "live";
@@ -125,11 +117,20 @@ Deno.serve(async (req) => {
 
       const matchDate = m.dateTimeGMT || m.date || new Date().toISOString();
 
-      const { data, error } = await supabase
+      // Check if match already exists by external_id
+      const { data: existing } = await supabase
         .from("matches")
-        .upsert(
-          {
-            id: m.id,
+        .select("id")
+        .eq("external_id", externalId)
+        .maybeSingle();
+
+      let matchDbId: string;
+
+      if (existing) {
+        // Update existing match
+        await supabase
+          .from("matches")
+          .update({
             team_a: teamA,
             team_b: teamB,
             team_a_logo: teamALogo,
@@ -139,68 +140,110 @@ Deno.serve(async (req) => {
             status,
             team_a_score: teamAScore,
             team_b_score: teamBScore,
-          },
-          { onConflict: "id" }
-        )
-        .select()
-        .single();
+          })
+          .eq("id", existing.id);
+        matchDbId = existing.id;
+      } else {
+        // Insert new match
+        const { data: newMatch, error } = await supabase
+          .from("matches")
+          .insert({
+            external_id: externalId,
+            team_a: teamA,
+            team_b: teamB,
+            team_a_logo: teamALogo,
+            team_b_logo: teamBLogo,
+            match_date: matchDate,
+            venue: m.venue || "TBD",
+            status,
+            team_a_score: teamAScore,
+            team_b_score: teamBScore,
+          })
+          .select()
+          .single();
+        if (error || !newMatch) continue;
+        matchDbId = newMatch.id;
+      }
 
-      if (!error && data) upsertedMatches.push(data);
+      matchesSynced++;
 
       // Fetch squad for this match
-      if (m.id) {
-        try {
-          const squadRes = await fetch(
-            `${CRICAPI_BASE}/match_squad?apikey=${CRICAPI_KEY}&id=${m.id}`
-          );
-          if (squadRes.ok) {
-            const squadData = await squadRes.json();
-            if (squadData.status === "success" && squadData.data) {
-              for (const teamSquad of squadData.data) {
-                const teamName = teamSquad.teamName || "Unknown";
-                for (const p of teamSquad.players || []) {
-                  const role = mapRole(p.battingStyle, p.bowlingStyle, p.role);
-                  const { data: player } = await supabase
+      try {
+        const squadRes = await fetch(
+          `${CRICAPI_BASE}/match_squad?apikey=${CRICAPI_KEY}&id=${externalId}`
+        );
+        if (squadRes.ok) {
+          const squadData = await squadRes.json();
+          if (squadData.status === "success" && squadData.data) {
+            for (const teamSquad of squadData.data) {
+              const teamName = teamSquad.teamName || "Unknown";
+              for (const p of teamSquad.players || []) {
+                const pExternalId = p.id;
+                if (!pExternalId) continue;
+
+                const role = mapRole(p.battingStyle, p.bowlingStyle, p.role);
+
+                // Check if player exists
+                const { data: existingPlayer } = await supabase
+                  .from("players")
+                  .select("id")
+                  .eq("external_id", pExternalId)
+                  .maybeSingle();
+
+                let playerDbId: string;
+
+                if (existingPlayer) {
+                  await supabase
                     .from("players")
-                    .upsert(
-                      {
-                        id: p.id,
-                        name: p.name || "Unknown",
-                        team: teamName,
-                        role,
-                        credits: estimateCredits(p),
-                        image_url: p.playerImg || null,
-                        is_playing: p.playingXI === true ? true : p.playingXI === false ? false : null,
-                      },
-                      { onConflict: "id" }
-                    )
+                    .update({
+                      name: p.name || "Unknown",
+                      team: teamName,
+                      role,
+                      image_url: p.playerImg || null,
+                      is_playing: p.playingXI === true ? true : p.playingXI === false ? false : null,
+                    })
+                    .eq("id", existingPlayer.id);
+                  playerDbId = existingPlayer.id;
+                } else {
+                  const { data: newPlayer, error } = await supabase
+                    .from("players")
+                    .insert({
+                      external_id: pExternalId,
+                      name: p.name || "Unknown",
+                      team: teamName,
+                      role,
+                      credits: estimateCredits(p),
+                      image_url: p.playerImg || null,
+                      is_playing: p.playingXI === true ? true : p.playingXI === false ? false : null,
+                    })
                     .select()
                     .single();
-
-                  // Link player to match
-                  if (player) {
-                    await supabase
-                      .from("match_players")
-                      .upsert(
-                        { match_id: m.id, player_id: player.id },
-                        { onConflict: "match_id,player_id" }
-                      );
-                  }
+                  if (error || !newPlayer) continue;
+                  playerDbId = newPlayer.id;
                 }
+
+                // Link player to match (ignore conflicts)
+                await supabase
+                  .from("match_players")
+                  .upsert(
+                    { match_id: matchDbId, player_id: playerDbId },
+                    { onConflict: "match_id,player_id" }
+                  );
               }
             }
           }
-        } catch (squadErr) {
-          console.error(`Squad fetch error for match ${m.id}:`, squadErr);
         }
+      } catch (squadErr) {
+        console.error(`Squad fetch error for match ${externalId}:`, squadErr);
       }
     }
 
     return new Response(
       JSON.stringify({
         success: true,
-        matches_synced: upsertedMatches.length,
+        matches_synced: matchesSynced,
         psl_series_id: pslSeriesId,
+        total_api_matches: allMatches.length,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
@@ -220,15 +263,12 @@ function mapRole(battingStyle?: string, bowlingStyle?: string, role?: string): "
   if (r.includes("all") || r.includes("ar")) return "AR";
   if (r.includes("bowl")) return "BOWL";
   if (r.includes("bat")) return "BAT";
-  // Fallback: if both batting and bowling style exist, likely all-rounder
   if (battingStyle && bowlingStyle && !bowlingStyle.toLowerCase().includes("none")) return "AR";
   if (bowlingStyle && !bowlingStyle.toLowerCase().includes("none")) return "BOWL";
   return "BAT";
 }
 
 function estimateCredits(player: any): number {
-  // Simple credit estimation based on role and name recognition
-  // In production, this would use actual performance data
   const r = (player.role || "").toLowerCase();
   if (r.includes("captain")) return 10;
   if (r.includes("keeper")) return 8.5;
