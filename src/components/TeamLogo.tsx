@@ -1,7 +1,5 @@
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
-
-// No external URLs - just use colored circles with abbreviations
-// This is reliable and always works
 
 const TEAM_ABBR: Record<string, string> = {
   'Lahore Qalandars': 'LQ',
@@ -41,6 +39,26 @@ const TEAM_COLORS: Record<string, string> = {
   'Rawalpindi Pindiz': 'from-emerald-500 to-emerald-700',
 };
 
+// Team logo URLs from Cricbuzz/i.cricketcb.com CDN
+const TEAM_LOGOS: Record<string, string> = {
+  'LQ': 'https://i.cricketcb.com/stats/img/faceImages/ipl/LQ.jpg',
+  'Lahore Qalandars': 'https://i.cricketcb.com/stats/img/faceImages/ipl/LQ.jpg',
+  'KK': 'https://i.cricketcb.com/stats/img/faceImages/ipl/KK.jpg',
+  'Karachi Kings': 'https://i.cricketcb.com/stats/img/faceImages/ipl/KK.jpg',
+  'IU': 'https://i.cricketcb.com/stats/img/faceImages/ipl/IU.jpg',
+  'Islamabad United': 'https://i.cricketcb.com/stats/img/faceImages/ipl/IU.jpg',
+  'PZ': 'https://i.cricketcb.com/stats/img/faceImages/ipl/PZ.jpg',
+  'Peshawar Zalmi': 'https://i.cricketcb.com/stats/img/faceImages/ipl/PZ.jpg',
+  'QG': 'https://i.cricketcb.com/stats/img/faceImages/ipl/QG.jpg',
+  'Quetta Gladiators': 'https://i.cricketcb.com/stats/img/faceImages/ipl/QG.jpg',
+  'MS': 'https://i.cricketcb.com/stats/img/faceImages/ipl/MS.jpg',
+  'Multan Sultans': 'https://i.cricketcb.com/stats/img/faceImages/ipl/MS.jpg',
+  'HK': 'https://i.cricketcb.com/stats/img/faceImages/ipl/HK.jpg',
+  'Hyderabad Kingsmen': 'https://i.cricketcb.com/stats/img/faceImages/ipl/HK.jpg',
+  'RP': 'https://i.cricketcb.com/stats/img/faceImages/ipl/RP.jpg',
+  'Rawalpindi Pindiz': 'https://i.cricketcb.com/stats/img/faceImages/ipl/RP.jpg',
+};
+
 // Canonical full names for display
 const TEAM_FULL_NAMES: Record<string, string> = {
   'LQ': 'Lahore Qalandars',
@@ -65,9 +83,31 @@ const sizeMap = {
   lg: 'w-16 h-16 text-sm',
 };
 
+const imgSizeMap = {
+  sm: 32,
+  md: 48,
+  lg: 64,
+};
+
 export const TeamLogo = ({ team, size = 'md', className }: TeamLogoProps) => {
+  const [imgError, setImgError] = useState(false);
   const abbr = TEAM_ABBR[team] || team.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   const gradient = TEAM_COLORS[team] || 'from-gray-500 to-gray-700';
+  const logoUrl = TEAM_LOGOS[team];
+
+  if (logoUrl && !imgError) {
+    return (
+      <img
+        src={logoUrl}
+        alt={`${team} logo`}
+        width={imgSizeMap[size]}
+        height={imgSizeMap[size]}
+        className={cn(sizeMap[size], 'rounded-full object-cover shadow-md', className)}
+        onError={() => setImgError(true)}
+        loading="lazy"
+      />
+    );
+  }
 
   return (
     <div className={cn(
