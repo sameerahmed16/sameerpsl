@@ -1,34 +1,56 @@
 import { cn } from '@/lib/utils';
-import { useState } from 'react';
 
-const TEAM_LOGOS: Record<string, string> = {
-  'Lahore Qalandars': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340089.png',
-  'LQ': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340089.png',
-  'Karachi Kings': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340091.png',
-  'KK': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340091.png',
-  'Islamabad United': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340087.png',
-  'IU': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340087.png',
-  'Peshawar Zalmi': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340093.png',
-  'PZ': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340093.png',
-  'Quetta Gladiators': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340095.png',
-  'QG': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340095.png',
-  'Multan Sultans': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340097.png',
-  'MS': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340097.png',
+// No external URLs - just use colored circles with abbreviations
+// This is reliable and always works
+
+const TEAM_ABBR: Record<string, string> = {
+  'Lahore Qalandars': 'LQ',
+  'LQ': 'LQ',
+  'Karachi Kings': 'KK',
+  'KK': 'KK',
+  'Islamabad United': 'IU',
+  'IU': 'IU',
+  'Peshawar Zalmi': 'PZ',
+  'PZ': 'PZ',
+  'Quetta Gladiators': 'QG',
+  'QG': 'QG',
+  'Multan Sultans': 'MS',
+  'MS': 'MS',
+  'Hyderabad Kingsmen': 'HK',
+  'HK': 'HK',
+  'Rawalpindi Pindiz': 'RP',
+  'RP': 'RP',
 };
 
 const TEAM_COLORS: Record<string, string> = {
-  'LQ': 'bg-red-600',
-  'Lahore Qalandars': 'bg-red-600',
-  'KK': 'bg-blue-700',
-  'Karachi Kings': 'bg-blue-700',
-  'IU': 'bg-red-700',
-  'Islamabad United': 'bg-red-700',
-  'PZ': 'bg-yellow-500',
-  'Peshawar Zalmi': 'bg-yellow-500',
-  'QG': 'bg-purple-700',
-  'Quetta Gladiators': 'bg-purple-700',
-  'MS': 'bg-cyan-600',
-  'Multan Sultans': 'bg-cyan-600',
+  'LQ': 'from-red-600 to-red-800',
+  'Lahore Qalandars': 'from-red-600 to-red-800',
+  'KK': 'from-blue-600 to-blue-800',
+  'Karachi Kings': 'from-blue-600 to-blue-800',
+  'IU': 'from-red-700 to-orange-600',
+  'Islamabad United': 'from-red-700 to-orange-600',
+  'PZ': 'from-yellow-400 to-yellow-600',
+  'Peshawar Zalmi': 'from-yellow-400 to-yellow-600',
+  'QG': 'from-purple-600 to-purple-800',
+  'Quetta Gladiators': 'from-purple-600 to-purple-800',
+  'MS': 'from-cyan-500 to-cyan-700',
+  'Multan Sultans': 'from-cyan-500 to-cyan-700',
+  'HK': 'from-orange-500 to-amber-700',
+  'Hyderabad Kingsmen': 'from-orange-500 to-amber-700',
+  'RP': 'from-emerald-500 to-emerald-700',
+  'Rawalpindi Pindiz': 'from-emerald-500 to-emerald-700',
+};
+
+// Canonical full names for display
+const TEAM_FULL_NAMES: Record<string, string> = {
+  'LQ': 'Lahore Qalandars',
+  'KK': 'Karachi Kings',
+  'IU': 'Islamabad United',
+  'PZ': 'Peshawar Zalmi',
+  'QG': 'Quetta Gladiators',
+  'MS': 'Multan Sultans',
+  'HK': 'Hyderabad Kingsmen',
+  'RP': 'Rawalpindi Pindiz',
 };
 
 interface TeamLogoProps {
@@ -38,33 +60,29 @@ interface TeamLogoProps {
 }
 
 const sizeMap = {
-  sm: 'w-8 h-8',
-  md: 'w-12 h-12',
-  lg: 'w-16 h-16',
+  sm: 'w-8 h-8 text-[10px]',
+  md: 'w-12 h-12 text-xs',
+  lg: 'w-16 h-16 text-sm',
 };
 
 export const TeamLogo = ({ team, size = 'md', className }: TeamLogoProps) => {
-  const [imgFailed, setImgFailed] = useState(false);
-  const logoUrl = TEAM_LOGOS[team];
-  const abbr = team.length <= 3 ? team : team.split(' ').map(w => w[0]).join('').slice(0, 2);
-  const colorClass = TEAM_COLORS[team] || 'bg-muted';
-
-  if (logoUrl && !imgFailed) {
-    return (
-      <img
-        src={logoUrl}
-        alt={team}
-        className={cn(sizeMap[size], 'object-contain rounded-full', className)}
-        onError={() => setImgFailed(true)}
-      />
-    );
-  }
+  const abbr = TEAM_ABBR[team] || team.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const gradient = TEAM_COLORS[team] || 'from-gray-500 to-gray-700';
 
   return (
-    <div className={cn(sizeMap[size], 'rounded-full flex items-center justify-center text-white font-display font-bold text-xs', colorClass, className)}>
+    <div className={cn(
+      sizeMap[size],
+      'rounded-full flex items-center justify-center text-white font-display font-bold bg-gradient-to-br shadow-md',
+      gradient,
+      className
+    )}>
       {abbr}
     </div>
   );
 };
 
-export { TEAM_LOGOS, TEAM_COLORS };
+export const getTeamFullName = (teamKey: string): string => {
+  return TEAM_FULL_NAMES[teamKey] || teamKey;
+};
+
+export { TEAM_ABBR, TEAM_COLORS, TEAM_FULL_NAMES };
