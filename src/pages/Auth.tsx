@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { lovable } from '@/integrations/lovable';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
-import { Mail, Lock, User, ArrowRight } from 'lucide-react';
+import { Mail, Lock, User, ArrowRight, CheckCircle2, XCircle } from 'lucide-react';
 
 const Auth = () => {
   const [isLogin, setIsLogin] = useState(true);
@@ -13,6 +13,29 @@ const Auth = () => {
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
+  const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
+  const [checkingUsername, setCheckingUsername] = useState(false);
+
+  // Debounced username availability check
+  useEffect(() => {
+    if (isLogin || username.length < 3) {
+      setUsernameAvailable(null);
+      return;
+    }
+
+    setCheckingUsername(true);
+    const timer = setTimeout(async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('username', username)
+        .maybeSingle();
+      setUsernameAvailable(!data);
+      setCheckingUsername(false);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [username, isLogin]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,6 +47,12 @@ const Auth = () => {
         if (error) throw error;
         toast.success('Welcome back! 🏏');
       } else {
+        if (usernameAvailable === false) {
+          toast.error('Username is already taken. Please choose another.');
+          setLoading(false);
+          return;
+        }
+
         const { error } = await supabase.auth.signUp({
           email,
           password,
@@ -33,7 +62,7 @@ const Auth = () => {
           },
         });
         if (error) throw error;
-        toast.success('Account created! Check your email to verify.');
+        toast.success('Account created! You are now signed in. 🏏');
       }
     } catch (error: any) {
       toast.error(error.message);
@@ -43,7 +72,9 @@ const Auth = () => {
   };
 
   const handleGoogleLogin = async () => {
-    const result = await lovable.auth.signInWithOAuth('google');
+    const result = await lovable.auth.signInWithOAuth('google', {
+      redirect_uri: window.location.origin,
+    });
     if (result?.error) toast.error(String(result.error));
   };
 
@@ -71,10 +102,25 @@ const Auth = () => {
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   placeholder="CricketKing99"
-                  className="pl-10 bg-card border-border text-foreground"
+                  className="pl-10 pr-10 bg-card border-border text-foreground"
                   required
+                  minLength={3}
                 />
+                {username.length >= 3 && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    {checkingUsername ? (
+                      <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+                    ) : usernameAvailable === true ? (
+                      <CheckCircle2 className="w-4 h-4 text-green-500" />
+                    ) : usernameAvailable === false ? (
+                      <XCircle className="w-4 h-4 text-red-500" />
+                    ) : null}
+                  </div>
+                )}
               </div>
+              {usernameAvailable === false && (
+                <p className="text-xs text-red-500">Username is already taken</p>
+              )}
             </div>
           )}
 
@@ -113,7 +159,7 @@ const Auth = () => {
 
           <Button
             type="submit"
-            disabled={loading}
+            disabled={loading || (!isLogin && usernameAvailable === false)}
             className="w-full gradient-primary text-primary-foreground font-display font-bold py-5"
           >
             {loading ? 'Loading...' : isLogin ? 'Sign In' : 'Create Account'}
