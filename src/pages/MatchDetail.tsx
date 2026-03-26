@@ -79,15 +79,45 @@ const MatchDetail = () => {
     },
   });
 
-  // Auto-sync players if none found
+  // Auto-sync players if none found — try edge function first, then proxy fallback
   useEffect(() => {
-    if (!playersLoading && allPlayers.length === 0 && !autoSyncDone.current) {
+    if (!playersLoading && allPlayers.length === 0 && !autoSyncDone.current && match?.external_id) {
       autoSyncDone.current = true;
-      supabase.functions.invoke('sync-players', { body: { match_id: id } }).then(() => {
+      
+      const syncPlayers = async () => {
+        // Try direct sync first
+        await supabase.functions.invoke('sync-players', { body: { match_id: id } });
         queryClient.invalidateQueries({ queryKey: ['match-players', id] });
-      });
+        
+        // Check if players appeared after a delay
+        await new Promise(r => setTimeout(r, 3000));
+        const { data: check } = await supabase
+          .from('match_players')
+          .select('id')
+          .eq('match_id', id!)
+          .limit(1);
+        
+        if (!check?.length) {
+          // Fallback: fetch via proxy and post to sync-players
+          try {
+            const { data: squadData } = await supabase.functions.invoke('proxy-cricapi', {
+              body: { endpoint: 'match_squad', params: { id: match.external_id } }
+            });
+            if (squadData?.status === 'success' && squadData?.data) {
+              await supabase.functions.invoke('sync-players', {
+                body: { match_id: id, squad_data: squadData.data }
+              });
+              queryClient.invalidateQueries({ queryKey: ['match-players', id] });
+            }
+          } catch (e) {
+            console.error('Proxy fallback failed:', e);
+          }
+        }
+      };
+      
+      syncPlayers();
     }
-  }, [playersLoading, allPlayers.length, id, queryClient]);
+  }, [playersLoading, allPlayers.length, id, queryClient, match?.external_id]);
 
   // Fetch existing user team
   const { data: existingTeam } = useQuery({
