@@ -99,8 +99,8 @@ Deno.serve(async (req) => {
       const teams = (match.teams || []) as string[];
       const teamA = teams[0] || match.teamInfo?.[0]?.name || parseTeamFromName(match.name, 0);
       const teamB = teams[1] || match.teamInfo?.[1]?.name || parseTeamFromName(match.name, 1);
-      const teamALogo = match.teamInfo?.[0]?.shortname || TEAM_ABBRS[teamA] || teamA.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
-      const teamBLogo = match.teamInfo?.[1]?.shortname || TEAM_ABBRS[teamB] || teamB.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+      const teamALogo = TEAM_ABBRS[teamA] || teamA.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+      const teamBLogo = TEAM_ABBRS[teamB] || teamB.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
 
       let status = "upcoming";
       if (match.matchStarted && !match.matchEnded) status = "live";
