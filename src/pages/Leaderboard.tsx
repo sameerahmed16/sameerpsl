@@ -2,16 +2,12 @@ import { useState, useEffect } from 'react';
 import { Layout } from '@/components/Layout';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import { Trophy, Medal, ChevronDown, Star, Users } from 'lucide-react';
+import { Trophy, Medal, ChevronDown, Users, Crown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-
-const rankStyles: Record<number, string> = {
-  1: 'gradient-gold text-secondary-foreground shadow-gold',
-  2: 'bg-muted text-foreground',
-  3: 'bg-muted text-foreground',
-};
+import { format, addHours, subHours, isAfter, isBefore } from 'date-fns';
+import { TeamLogo } from '@/components/TeamLogo';
 
 const statusColors: Record<string, string> = {
   upcoming: 'bg-accent text-accent-foreground',
@@ -58,19 +54,36 @@ const Leaderboard = () => {
     return () => { supabase.removeChannel(channel); };
   }, [queryClient, selectedMatch]);
 
-  const { data: matches = [] } = useQuery({
+  const { data: allMatches = [] } = useQuery({
     queryKey: ['leaderboard-matches'],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('matches')
         .select('id, team_a, team_b, status, match_date')
         .in('status', ['upcoming', 'live', 'completed'])
-        .order('match_date', { ascending: false })
-        .limit(20);
+        .order('match_date', { ascending: true })
+        .limit(50);
       if (error) throw error;
       return data;
     },
   });
+
+  // Filter: upcoming within next 48h, live always, completed within last 24h
+  const now = new Date();
+  const matches = allMatches.filter(m => {
+    const d = new Date(m.match_date);
+    if (m.status === 'live') return true;
+    if (m.status === 'upcoming') return isBefore(d, addHours(now, 48));
+    if (m.status === 'completed') return isAfter(d, subHours(now, 24));
+    return false;
+  });
+
+  // Auto-select first match
+  useEffect(() => {
+    if (matches.length > 0 && !selectedMatch) {
+      setSelectedMatch(matches[0].id);
+    }
+  }, [matches, selectedMatch]);
 
   const { data: overallEntries = [], isLoading: overallLoading } = useQuery({
     queryKey: ['leaderboard-overall'],
@@ -85,7 +98,8 @@ const Leaderboard = () => {
     },
   });
 
-  const selectedMatchStatus = matches.find(m => m.id === selectedMatch)?.status;
+  const selectedMatchData = matches.find(m => m.id === selectedMatch);
+  const selectedMatchStatus = selectedMatchData?.status;
 
   const { data: matchEntries = [], isLoading: matchLoading } = useQuery({
     queryKey: ['leaderboard-match', selectedMatch],
@@ -119,7 +133,6 @@ const Leaderboard = () => {
     refetchInterval: 15000,
   });
 
-  // Fetch squad for expanded entry
   const { data: expandedSquad = [] } = useQuery({
     queryKey: ['squad', expandedEntry],
     enabled: !!expandedEntry,
@@ -130,7 +143,6 @@ const Leaderboard = () => {
         .eq('user_team_id', expandedEntry!);
       if (error) throw error;
 
-      // Fetch match points if live/completed
       let pointsMap = new Map<string, number>();
       if (selectedMatch && selectedMatchStatus !== 'upcoming') {
         const playerIds = (tp || []).map(t => t.player_id);
@@ -168,10 +180,28 @@ const Leaderboard = () => {
     WK: 'bg-destructive/20 text-destructive border-destructive/30',
   };
 
+  const getInitials = (name: string) => {
+    return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  };
+
+  const getRankIcon = (rank: number) => {
+    if (rank === 1) return <Crown className="w-5 h-5 text-yellow-400" />;
+    if (rank === 2) return <Medal className="w-5 h-5 text-gray-300" />;
+    if (rank === 3) return <Medal className="w-5 h-5 text-amber-600" />;
+    return null;
+  };
+
+  const getRankStyle = (rank: number) => {
+    if (rank === 1) return 'bg-gradient-to-r from-yellow-500/20 to-amber-500/10 border-yellow-500/40';
+    if (rank === 2) return 'bg-gradient-to-r from-gray-300/15 to-gray-400/5 border-gray-400/30';
+    if (rank === 3) return 'bg-gradient-to-r from-amber-600/15 to-orange-500/5 border-amber-600/30';
+    return 'gradient-card';
+  };
+
   const renderSquad = (entry: LeaderboardEntry) => {
     if (expandedEntry !== entry.userTeamId || expandedSquad.length === 0) return null;
     return (
-      <div className="mt-2 p-3 rounded-lg bg-muted/50 border border-border space-y-1.5">
+      <div className="mt-2 p-3 rounded-lg bg-muted/50 border border-border space-y-1.5 animate-in slide-in-from-top-2 duration-200">
         <p className="text-[11px] font-display font-semibold text-muted-foreground uppercase tracking-wider mb-2">
           <Users className="w-3 h-3 inline mr-1" />Squad ({expandedSquad.length} players)
         </p>
@@ -211,27 +241,36 @@ const Leaderboard = () => {
           <div key={`${entry.rank}-${entry.userTeamId || entry.username}`}>
             <div
               className={cn(
-                "flex items-center gap-3 rounded-lg border border-border p-3 transition-all",
-                entry.rank <= 3 ? rankStyles[entry.rank] : "gradient-card",
+                "flex items-center gap-3 rounded-xl border p-3.5 transition-all",
+                getRankStyle(entry.rank),
                 showSquad && "cursor-pointer hover:border-primary/40"
               )}
               onClick={() => showSquad && toggleExpand(entry.userTeamId)}
             >
+              {/* Rank */}
               <div className={cn(
-                "w-8 h-8 rounded-full flex items-center justify-center font-display font-black text-sm shrink-0",
-                entry.rank <= 3 ? "" : "bg-muted text-muted-foreground"
+                "w-9 h-9 rounded-full flex items-center justify-center font-display font-black text-sm shrink-0",
+                entry.rank > 3 && "bg-muted text-muted-foreground"
               )}>
-                {entry.rank <= 3 ? <Medal className="w-5 h-5" /> : entry.rank}
+                {getRankIcon(entry.rank) || entry.rank}
+              </div>
+
+              {/* Avatar + Name */}
+              <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[11px] font-bold shrink-0">
+                {getInitials(entry.username)}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="font-display font-semibold text-sm truncate">{entry.username}</p>
               </div>
-              <span className={cn("font-display font-bold text-sm", entry.rank <= 3 ? "" : "text-secondary")}>
+
+              {/* Points */}
+              <span className={cn("font-display font-bold text-sm", entry.rank <= 3 ? "text-foreground" : "text-secondary")}>
                 {isUpcoming ? 'Entered' : `${entry.points.toLocaleString()} pts`}
               </span>
+
               {showSquad && (
                 <ChevronDown className={cn(
-                  "w-4 h-4 text-muted-foreground transition-transform",
+                  "w-4 h-4 text-muted-foreground transition-transform duration-200",
                   expandedEntry === entry.userTeamId && "rotate-180"
                 )} />
               )}
@@ -239,6 +278,9 @@ const Leaderboard = () => {
             {showSquad && renderSquad(entry)}
           </div>
         ))}
+        <p className="text-center text-muted-foreground text-[11px] pt-2">
+          {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
+        </p>
       </div>
     );
   };
@@ -262,7 +304,7 @@ const Leaderboard = () => {
 
           <TabsContent value="match">
             {matches.length === 0 ? (
-              <p className="text-center text-muted-foreground text-sm py-8">No matches yet.</p>
+              <p className="text-center text-muted-foreground text-sm py-8">No matches in the next 48 hours.</p>
             ) : (
               <>
                 <div className="flex gap-2 overflow-x-auto pb-2 mb-3 no-scrollbar">
@@ -271,16 +313,26 @@ const Leaderboard = () => {
                       key={m.id}
                       onClick={() => { setSelectedMatch(m.id); setExpandedEntry(null); }}
                       className={cn(
-                        "shrink-0 text-xs px-3 py-1.5 rounded-full font-display font-semibold transition-colors border flex items-center gap-1.5",
+                        "shrink-0 rounded-xl border p-3 text-left transition-all min-w-[140px]",
                         selectedMatch === m.id
-                          ? "gradient-primary text-primary-foreground border-primary"
-                          : "bg-muted text-muted-foreground border-border hover:text-foreground"
+                          ? "gradient-primary text-primary-foreground border-primary shadow-lg"
+                          : "bg-card text-card-foreground border-border hover:border-primary/40"
                       )}
                     >
-                      {m.team_a} vs {m.team_b}
-                      <span className={cn("text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase", statusColors[m.status] || 'bg-muted')}>
-                        {m.status === 'live' ? '🔴 Live' : m.status}
-                      </span>
+                      <div className="flex items-center gap-2 mb-1">
+                        <TeamLogo team={m.team_a} size="sm" />
+                        <span className="text-[10px] font-bold opacity-60">vs</span>
+                        <TeamLogo team={m.team_b} size="sm" />
+                      </div>
+                      <p className="text-xs font-display font-bold truncate">{m.team_a} vs {m.team_b}</p>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <span className="text-[10px] opacity-70">
+                          {format(new Date(m.match_date), 'MMM d, h:mm a')}
+                        </span>
+                        <span className={cn("text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase", statusColors[m.status] || 'bg-muted')}>
+                          {m.status === 'live' ? '🔴 Live' : m.status}
+                        </span>
+                      </div>
                     </button>
                   ))}
                 </div>
