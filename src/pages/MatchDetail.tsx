@@ -133,19 +133,16 @@ const MatchDetail = () => {
 
   // Determine final player list: DB players or fallback
   const allPlayers = useMemo(() => {
-    if (dbPlayers.length > 0) {
-      setUsingFallback(false);
-      return dbPlayers;
-    }
+    if (dbPlayers.length > 0) return dbPlayers;
     if (!match) return [];
-    // Use fallback data
     const fallbacks = getFallbackPlayers(match.team_a, match.team_b);
-    if (fallbacks.length > 0) {
-      setUsingFallback(true);
-      return fallbacks.map(fallbackToPlayer);
-    }
+    if (fallbacks.length > 0) return fallbacks.map(fallbackToPlayer);
     return [];
   }, [dbPlayers, match]);
+
+  useEffect(() => {
+    setUsingFallback(dbPlayers.length === 0 && allPlayers.length > 0);
+  }, [dbPlayers.length, allPlayers.length]);
 
   // Fetch existing user team
   const { data: existingTeam } = useQuery({
