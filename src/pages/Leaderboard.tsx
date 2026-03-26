@@ -16,7 +16,23 @@ const Leaderboard = () => {
   const [selectedMatch, setSelectedMatch] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
-  const { data: matches = [] } = useQuery({
+  // Realtime subscription for live leaderboard updates
+  useEffect(() => {
+    const channel = supabase
+      .channel('leaderboard-realtime')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_teams' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['leaderboard-overall'] });
+        if (selectedMatch) {
+          queryClient.invalidateQueries({ queryKey: ['leaderboard-match', selectedMatch] });
+        }
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['leaderboard-overall'] });
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [queryClient, selectedMatch]);
+
     queryKey: ['leaderboard-matches'],
     queryFn: async () => {
       const { data, error } = await supabase
