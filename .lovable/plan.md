@@ -1,110 +1,67 @@
 
 
-## Plan: Fix Live Scoring Pipeline & Leaderboard Accuracy
+## Plan: Multi-Source Live Score Fallback Chain
 
-### Critical Issues Found
+### Current State
+- CricAPI is the sole data source, often blocked by network resets in Edge Functions
+- `http_get_json` RPC is the only fallback, also unreliable
+- If both fail, no scores update at all
 
-1. **Player mapping is broken**: All 11 players in the DB have `external_id = null`. The `updatePlayerStats` function matches scorecard data by `external_id` — so it will **never** update any player's points. This is the #1 blocker.
+### What We'll Build
 
-2. **CricAPI network is blocked**: Edge functions can't reach CricAPI directly (connection reset). The `http_get_json` RPC workaround exists but is unreliable. Need a more robust fallback chain.
+A priority-based fallback chain in `sync-live-scores`: **CricAPI → Cricbuzz scraping → ESPN scraping → manual entry admin panel**
 
-3. **Points accumulation bug**: Batting points **overwrite** (`update({ points })`) while bowling/fielding **add** to existing points. If the sync runs multiple times per match, bowling and fielding points keep doubling but batting resets. All categories must use the same approach — compute total from scratch each sync.
+#### 1. Cricbuzz Scraping Fallback (Edge Function)
+When CricAPI fails, scrape Cricbuzz's live scorecard page for the match. Cricbuzz URLs follow a predictable pattern (`/live-cricket-scores/{match_id}`).
 
-4. **Realtime not enabled for leaderboard**: `user_teams` table is NOT in the `supabase_realtime` publication. Only `matches` and `players` are. Leaderboard can't get push updates.
+- Store `cricbuzz_match_id` on the `matches` table (new column via migration)
+- Parse the HTML for: team scores, individual batting/bowling stats, match status
+- Extract player names and stats, map to DB players by fuzzy name matching
+- Compute fantasy points from scraped stats using the same scoring functions
 
-5. **Only 11 of ~200 players in DB**: Most user teams reference fallback-generated UUIDs that don't exist in the `players` table, so `team_players → players(points)` joins return null.
+#### 2. ESPN Scraping Fallback
+If Cricbuzz also fails, try ESPN Cricinfo's JSON API (they expose match data at predictable endpoints like `https://www.espncricinfo.com/matches/engine/match/{id}.json`).
 
-### Fix Plan
+- Store `espn_match_id` on the `matches` table
+- ESPN's JSON endpoint returns structured scorecard data — easier to parse than HTML
 
-#### 1. Seed All Players with External IDs
-**Migration + Edge Function update**
+#### 3. Admin Manual Score Entry
+As the last resort, add an admin page where you can manually enter:
+- Match scores (team runs/wickets/overs)
+- Individual player batting/bowling stats
+- Match status (live/completed)
 
-- Create a new edge function `seed-players` that:
-  - Fetches player lists from CricAPI for all PSL 2026 matches (using `match_squad` endpoint)
-  - Inserts/upserts players into the `players` table with their CricAPI `external_id`
-  - Falls back to inserting from `pslSquads.ts` data if API is unreachable
-- On the frontend side, when saving a team, ensure `team_players.player_id` references actual DB player IDs (not fallback-generated ones)
+This writes directly to `match_player_points` and `matches` tables.
 
-**File: `src/pages/MatchDetail.tsx`**
-- When saving a team, upsert players to DB first (if they don't exist), then reference the real DB IDs
-- Match fallback players to DB players by name+team, not by generated UUID
-
-#### 2. Fix Points Calculation — Compute from Scratch
-**File: `supabase/functions/sync-live-scores/index.ts`**
-
-- Reset all player points to 0 at the start of each sync cycle for that match
-- Then apply batting + bowling + fielding points additively in a single pass
-- This prevents accumulation bugs across multiple syncs
-- Store per-match points in a new approach: track points per player per match
-
-#### 3. Add `match_player_points` Table
-**Migration**
-
-Create a junction table that stores points per player per match (not on the global `players` table):
-
+#### 4. Fallback Orchestration in Edge Function
+Update `sync-live-scores` with a waterfall:
 ```text
-match_player_points
-  id          uuid PK
-  match_id    uuid NOT NULL
-  player_id   uuid NOT NULL
-  points      integer DEFAULT 0
-  UNIQUE(match_id, player_id)
+trySource("cricapi")  → success? done
+trySource("cricbuzz") → success? done  
+trySource("espn")     → success? done
+log("All sources failed, awaiting manual entry")
 ```
 
-This way:
-- Each match has isolated scoring — no cross-match contamination
-- The sync function upserts into this table instead of updating `players.points`
-- `user_teams.total_points` calculation joins through this table
-- The global `players.points` becomes a sum across all matches (or is deprecated)
+Each source returns a normalized `MatchScoreData` object with the same shape, so downstream point calculation is source-agnostic.
 
-#### 4. Enable Realtime on `user_teams`
-**Migration**
-
-```sql
-ALTER PUBLICATION supabase_realtime ADD TABLE public.user_teams;
-```
-
-Then add realtime subscriptions on the frontend:
-- `Leaderboard.tsx`: subscribe to `user_teams` changes for live rank updates
-- `MatchDetail.tsx`: subscribe to `user_teams` for live "My Team" points
-
-#### 5. Robust API Fallback Chain
-**File: `supabase/functions/sync-live-scores/index.ts`**
-
-Improve `apiFetch`:
-- Try direct fetch first
-- Then try `http_get_json` RPC
-- Add request timeout (10s) to avoid hanging
-- Log which method succeeded for debugging
-
-#### 6. Frontend Player ID Reconciliation
-**File: `src/pages/MatchDetail.tsx`**
-
-When saving a team:
-- Before inserting into `user_teams` + `team_players`, upsert each selected player into the `players` table using name+team as the unique key
-- Use the returned DB `id` (not the fallback-generated one) for `team_players.player_id`, `captain_id`, `vice_captain_id`
-- This ensures all references point to real DB records that the scoring pipeline can update
+### Database Migration
+- Add `cricbuzz_match_id` and `espn_match_id` columns to `matches`
+- Add `data_source` column to `match_player_points` (track where points came from)
 
 ### Files Summary
 
 | Action | File |
 |--------|------|
-| Create | `supabase/functions/seed-players/index.ts` — bulk player seeding |
-| Migration | Create `match_player_points` table with RLS |
-| Migration | Add realtime for `user_teams` |
-| Edit | `supabase/functions/sync-live-scores/index.ts` — fix points logic, use `match_player_points` |
-| Edit | `src/pages/MatchDetail.tsx` — upsert players on save, use real DB IDs |
-| Edit | `src/pages/Leaderboard.tsx` — add realtime subscription |
+| Edit | `supabase/functions/sync-live-scores/index.ts` — add Cricbuzz + ESPN scrapers, fallback chain |
+| Migration | Add `cricbuzz_match_id`, `espn_match_id` to `matches`; `data_source` to `match_player_points` |
+| Create | `src/pages/AdminScores.tsx` — manual score entry page |
+| Edit | `src/App.tsx` — add admin route |
 
 ### Technical Details
 
-- **Player upsert on save**: Use Supabase's `.upsert()` with `onConflict: 'name,team'` (requires adding a unique constraint on `(name, team)` in migration)
-- **Points isolation**: `match_player_points` prevents the bug where a player's century in Match 1 inflates their score in Match 2
-- **Realtime subscription pattern**:
-  ```typescript
-  supabase.channel('leaderboard')
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_teams', filter: `match_id=eq.${matchId}` }, () => refetch())
-    .subscribe()
-  ```
-- **Sync flow**: CricAPI scorecard → compute all points from scratch → upsert into `match_player_points` → recalc `user_teams.total_points` → update `profiles.total_points`
+- **Cricbuzz scraping**: Direct `fetch()` of the match page HTML, parse with regex/string matching for score blocks. No Firecrawl needed — Cricbuzz pages are static HTML.
+- **ESPN JSON**: Their match pages expose a `.json` endpoint with full scorecard data including player IDs and stats.
+- **Name matching**: Normalize player names (lowercase, remove diacritics) and match against DB players by team + fuzzy name. Handle common variations (e.g., "Babar Azam" vs "M Babar Azam").
+- **Admin auth**: Only allow manual entry for users with admin role (check `user_roles` table). If no admin role system exists yet, use a simple email whitelist.
+- **Data source tracking**: `match_player_points.data_source` = 'cricapi' | 'cricbuzz' | 'espn' | 'manual' for debugging which source was used.
 
