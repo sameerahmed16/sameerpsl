@@ -8,6 +8,17 @@ const corsHeaders = {
 
 const CRICAPI_BASE = "https://api.cricapi.com/v1";
 
+const TEAM_ABBRS: Record<string, string> = {
+  "Lahore Qalandars": "LQ",
+  "Karachi Kings": "KK",
+  "Islamabad United": "IU",
+  "Peshawar Zalmi": "PZ",
+  "Quetta Gladiators": "QG",
+  "Multan Sultans": "MS",
+  "Hyderabad Kingsmen": "HK",
+  "Rawalpindi Pindiz": "RP",
+};
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -21,100 +32,86 @@ Deno.serve(async (req) => {
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Fetch ALL matches (not just current) across multiple offsets to find PSL matches
+    // Fetch all matches across pages, filter for PSL
     const allPslMatches: any[] = [];
-
     for (let offset = 0; offset <= 75; offset += 25) {
       const data = await fetchViaDb<any>(
         supabase,
         `${CRICAPI_BASE}/matches?apikey=${encodeURIComponent(CRICAPI_KEY)}&offset=${offset}`
       );
-
       if (data.status !== "success" || !data.data) break;
-
-      const psl = data.data.filter(
-        (m: any) =>
-          m?.name?.toLowerCase().includes("pakistan super league") ||
-          m?.name?.toLowerCase().includes("psl 2026")
+      const psl = data.data.filter((m: any) =>
+        m?.name?.toLowerCase().includes("pakistan super league")
       );
       allPslMatches.push(...psl);
-
-      // If fewer than 25 results, no more pages
       if (data.data.length < 25) break;
     }
 
-    // Also fetch currentMatches for live score data
-    let currentMatchData: any[] = [];
+    // Also get currentMatches for live scores
+    let currentMap = new Map<string, any>();
     try {
-      const currentData = await fetchViaDb<any>(
+      const curr = await fetchViaDb<any>(
         supabase,
         `${CRICAPI_BASE}/currentMatches?apikey=${encodeURIComponent(CRICAPI_KEY)}&offset=0`
       );
-      if (currentData.status === "success" && currentData.data) {
-        currentMatchData = currentData.data.filter(
-          (m: any) =>
-            m?.name?.toLowerCase().includes("pakistan super league") ||
-            m?.name?.toLowerCase().includes("psl 2026")
-        );
+      if (curr.status === "success" && curr.data) {
+        for (const m of curr.data) {
+          if (m?.id && m?.name?.toLowerCase().includes("pakistan super league")) {
+            currentMap.set(m.id, m);
+          }
+        }
       }
-    } catch (e) {
-      console.error("currentMatches fetch failed:", e);
-    }
+    } catch (_) {}
 
-    // Merge: prefer currentMatches data (has live scores) over matches data
-    const currentMatchMap = new Map<string, any>();
-    for (const m of currentMatchData) {
-      if (m?.id) currentMatchMap.set(m.id, m);
-    }
-
-    const mergedMatches: any[] = [];
+    // Merge: prefer currentMatches data (has live scores)
     const seenIds = new Set<string>();
-
-    // Add currentMatches first (they have live scores)
-    for (const m of currentMatchData) {
-      if (m?.id && !seenIds.has(m.id)) {
-        seenIds.add(m.id);
-        mergedMatches.push(m);
-      }
+    const merged: any[] = [];
+    for (const [id, m] of currentMap) {
+      seenIds.add(id);
+      merged.push(m);
     }
-
-    // Add remaining from matches endpoint
     for (const m of allPslMatches) {
       if (m?.id && !seenIds.has(m.id)) {
         seenIds.add(m.id);
-        mergedMatches.push(m);
+        merged.push(m);
       }
     }
 
-    let matchesSynced = 0;
+    // Get existing matches by external_id
+    const { data: existingMatches } = await supabase
+      .from("matches")
+      .select("id, external_id")
+      .not("external_id", "is", null);
 
-    for (const match of mergedMatches) {
+    const existingMap = new Map<string, string>();
+    for (const em of existingMatches || []) {
+      if (em.external_id) existingMap.set(em.external_id, em.id);
+    }
+
+    // Process in batches
+    const toInsert: any[] = [];
+    const toUpdate: { id: string; data: any }[] = [];
+
+    for (const match of merged) {
       const externalId = match?.id;
       if (!externalId) continue;
 
-      // Parse teams from match name if teamInfo not available
       const teams = (match.teams || []) as string[];
       const teamA = teams[0] || match.teamInfo?.[0]?.name || parseTeamFromName(match.name, 0);
       const teamB = teams[1] || match.teamInfo?.[1]?.name || parseTeamFromName(match.name, 1);
-      const teamALogo =
-        match.teamInfo?.[0]?.shortname ||
-        getTeamAbbr(teamA);
-      const teamBLogo =
-        match.teamInfo?.[1]?.shortname ||
-        getTeamAbbr(teamB);
+      const teamALogo = match.teamInfo?.[0]?.shortname || TEAM_ABBRS[teamA] || teamA.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+      const teamBLogo = match.teamInfo?.[1]?.shortname || TEAM_ABBRS[teamB] || teamB.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
 
       let status = "upcoming";
       if (match.matchStarted && !match.matchEnded) status = "live";
       else if (match.matchEnded) status = "completed";
       else if (match.status?.toLowerCase().includes("won") || match.status?.toLowerCase().includes("drawn") || match.status?.toLowerCase().includes("tied")) status = "completed";
 
-      const scores = match.score || [];
       let teamAScore: string | null = null;
       let teamBScore: string | null = null;
-
-      for (const score of scores) {
-        const innings = `${score.r || 0}/${score.w || 0} (${score.o || 0})`;
-        if (score.inning?.includes(teamA) || score.inning?.includes(teamALogo)) {
+      for (const s of match.score || []) {
+        const innings = `${s.r || 0}/${s.w || 0} (${s.o || 0})`;
+        if (s.inning?.includes(teamA) || s.inning?.includes(teamALogo)) {
           teamAScore = teamAScore ? `${teamAScore} & ${innings}` : innings;
         } else {
           teamBScore = teamBScore ? `${teamBScore} & ${innings}` : innings;
@@ -122,42 +119,37 @@ Deno.serve(async (req) => {
       }
 
       const matchDate = match.dateTimeGMT || match.date || new Date().toISOString();
+      const row = {
+        team_a: teamA, team_b: teamB,
+        team_a_logo: teamALogo, team_b_logo: teamBLogo,
+        match_date: matchDate, venue: match.venue || "TBD",
+        status, team_a_score: teamAScore, team_b_score: teamBScore,
+      };
 
-      // Extract match number from name for display
-      const venue = match.venue || "TBD";
-
-      const { data: existing } = await supabase.from("matches").select("id").eq("external_id", externalId).maybeSingle();
-
-      if (existing) {
-        await supabase
-          .from("matches")
-          .update({
-            team_a: teamA, team_b: teamB,
-            team_a_logo: teamALogo, team_b_logo: teamBLogo,
-            match_date: matchDate, venue, status,
-            team_a_score: teamAScore, team_b_score: teamBScore,
-          })
-          .eq("id", existing.id);
+      if (existingMap.has(externalId)) {
+        toUpdate.push({ id: existingMap.get(externalId)!, data: row });
       } else {
-        const { error } = await supabase
-          .from("matches")
-          .insert({
-            external_id: externalId,
-            team_a: teamA, team_b: teamB,
-            team_a_logo: teamALogo, team_b_logo: teamBLogo,
-            match_date: matchDate, venue, status,
-            team_a_score: teamAScore, team_b_score: teamBScore,
-          });
-        if (error) {
-          console.error(`Insert match error: ${error.message}`);
-          continue;
-        }
+        toInsert.push({ ...row, external_id: externalId });
       }
-
-      matchesSynced++;
     }
 
-    return new Response(JSON.stringify({ success: true, matches_synced: matchesSynced }), {
+    // Batch insert
+    if (toInsert.length > 0) {
+      const { error } = await supabase.from("matches").insert(toInsert);
+      if (error) console.error("Batch insert error:", error.message);
+    }
+
+    // Batch updates (Supabase doesn't support batch update, do individually but quickly)
+    for (const u of toUpdate) {
+      await supabase.from("matches").update(u.data).eq("id", u.id);
+    }
+
+    return new Response(JSON.stringify({
+      success: true,
+      matches_synced: toInsert.length + toUpdate.length,
+      inserted: toInsert.length,
+      updated: toUpdate.length,
+    }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: unknown) {
@@ -179,23 +171,6 @@ async function fetchViaDb<T>(supabase: ReturnType<typeof createClient>, url: str
 function parseTeamFromName(name: string, index: number): string {
   if (!name) return "TBD";
   const parts = name.split(" vs ");
-  if (parts.length >= 2) {
-    const team = parts[index]?.split(",")[0]?.trim();
-    return team || "TBD";
-  }
+  if (parts.length >= 2) return parts[index]?.split(",")[0]?.trim() || "TBD";
   return "TBD";
-}
-
-function getTeamAbbr(teamName: string): string {
-  const abbrs: Record<string, string> = {
-    "Lahore Qalandars": "LQ",
-    "Karachi Kings": "KK",
-    "Islamabad United": "IU",
-    "Peshawar Zalmi": "PZ",
-    "Quetta Gladiators": "QG",
-    "Multan Sultans": "MS",
-    "Hyderabad Kingsmen": "HK",
-    "Rawalpindi Pindiz": "RP",
-  };
-  return abbrs[teamName] || teamName.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
 }
