@@ -1,18 +1,19 @@
 import { cn } from '@/lib/utils';
+import { useState } from 'react';
 
 const TEAM_LOGOS: Record<string, string> = {
-  'Lahore Qalandars': 'https://upload.wikimedia.org/wikipedia/en/1/1b/Lahore_Qalandars_Logo.png',
-  'LQ': 'https://upload.wikimedia.org/wikipedia/en/1/1b/Lahore_Qalandars_Logo.png',
-  'Karachi Kings': 'https://upload.wikimedia.org/wikipedia/en/7/7c/Karachi_Kings_logo.png',
-  'KK': 'https://upload.wikimedia.org/wikipedia/en/7/7c/Karachi_Kings_logo.png',
-  'Islamabad United': 'https://upload.wikimedia.org/wikipedia/en/5/56/Islamabad_United_Logo.png',
-  'IU': 'https://upload.wikimedia.org/wikipedia/en/5/56/Islamabad_United_Logo.png',
-  'Peshawar Zalmi': 'https://upload.wikimedia.org/wikipedia/en/8/85/Peshawar_Zalmi_logo.png',
-  'PZ': 'https://upload.wikimedia.org/wikipedia/en/8/85/Peshawar_Zalmi_logo.png',
-  'Quetta Gladiators': 'https://upload.wikimedia.org/wikipedia/en/4/47/Quetta_Gladiators_Logo.png',
-  'QG': 'https://upload.wikimedia.org/wikipedia/en/4/47/Quetta_Gladiators_Logo.png',
-  'Multan Sultans': 'https://upload.wikimedia.org/wikipedia/en/5/5e/Multan_Sultans_Logo.png',
-  'MS': 'https://upload.wikimedia.org/wikipedia/en/5/5e/Multan_Sultans_Logo.png',
+  'Lahore Qalandars': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340089.png',
+  'LQ': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340089.png',
+  'Karachi Kings': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340091.png',
+  'KK': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340091.png',
+  'Islamabad United': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340087.png',
+  'IU': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340087.png',
+  'Peshawar Zalmi': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340093.png',
+  'PZ': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340093.png',
+  'Quetta Gladiators': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340095.png',
+  'QG': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340095.png',
+  'Multan Sultans': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340097.png',
+  'MS': 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_160/lsci/db/PICTURES/CMS/340000/340097.png',
 };
 
 const TEAM_COLORS: Record<string, string> = {
@@ -43,21 +44,18 @@ const sizeMap = {
 };
 
 export const TeamLogo = ({ team, size = 'md', className }: TeamLogoProps) => {
+  const [imgFailed, setImgFailed] = useState(false);
   const logoUrl = TEAM_LOGOS[team];
   const abbr = team.length <= 3 ? team : team.split(' ').map(w => w[0]).join('').slice(0, 2);
   const colorClass = TEAM_COLORS[team] || 'bg-muted';
 
-  if (logoUrl) {
+  if (logoUrl && !imgFailed) {
     return (
       <img
         src={logoUrl}
         alt={team}
-        className={cn(sizeMap[size], 'object-contain', className)}
-        onError={(e) => {
-          const el = e.target as HTMLImageElement;
-          el.style.display = 'none';
-          el.nextElementSibling?.classList.remove('hidden');
-        }}
+        className={cn(sizeMap[size], 'object-contain rounded-full', className)}
+        onError={() => setImgFailed(true)}
       />
     );
   }

@@ -91,14 +91,22 @@ Deno.serve(async (req) => {
       if (!match.external_id) continue;
 
       try {
-        const data = await apiFetch(
-          supabase,
-          `${CRICAPI_BASE}/match_squad?apikey=${encodeURIComponent(CRICAPI_KEY)}&id=${match.external_id}`
-        );
+        let squads: any[] | null = null;
 
-        if (data.status !== "success" || !data.data) continue;
+        // If squad_data was passed (from client proxy fallback), use it directly
+        if (body.squad_data && matchId) {
+          squads = body.squad_data;
+        } else {
+          const data = await apiFetch(
+            supabase,
+            `${CRICAPI_BASE}/match_squad?apikey=${encodeURIComponent(CRICAPI_KEY)}&id=${match.external_id}`
+          );
+          if (data.status === "success" && data.data) {
+            squads = data.data;
+          }
+        }
 
-        const squads = data.data;
+        if (!squads) continue;
         const matchPlayerIds: string[] = [];
 
         for (const squad of squads) {

@@ -11,6 +11,7 @@ import Leagues from "./pages/Leagues.tsx";
 import Profile from "./pages/Profile.tsx";
 import Auth from "./pages/Auth.tsx";
 import NotFound from "./pages/NotFound.tsx";
+import ScrollToTop from "./components/ScrollToTop";
 
 const queryClient = new QueryClient();
 
@@ -35,6 +36,7 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
+          <ScrollToTop />
           <Routes>
             <Route path="/auth" element={<AuthRoute><Auth /></AuthRoute>} />
             <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />

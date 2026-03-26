@@ -5,6 +5,7 @@ import { MatchCard } from '@/components/MatchCard';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { addDays, isBefore } from 'date-fns';
 
 type MatchStatus = 'upcoming' | 'live' | 'completed';
 
@@ -51,6 +52,16 @@ const Index = () => {
   const filteredMatches = matches.filter(m => m.status === activeTab);
   const liveCt = matches.filter(m => m.status === 'live').length;
 
+  // Split upcoming into "next 48h" and "later"
+  const now = new Date();
+  const cutoff = addDays(now, 2);
+  const next48h = filteredMatches.filter(m =>
+    activeTab === 'upcoming' && isBefore(new Date(m.match_date), cutoff)
+  );
+  const later = filteredMatches.filter(m =>
+    activeTab === 'upcoming' && !isBefore(new Date(m.match_date), cutoff)
+  );
+
   return (
     <Layout>
       <div className="space-y-6 pt-4">
@@ -76,12 +87,40 @@ const Index = () => {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value={activeTab} className="mt-4 space-y-3">
+          <TabsContent value={activeTab} className="mt-4 space-y-4">
             {isLoading ? (
               <div className="flex flex-col items-center gap-2 py-8">
                 <Loader2 className="w-6 h-6 text-primary animate-spin" />
                 <p className="text-muted-foreground text-sm">Loading matches...</p>
               </div>
+            ) : activeTab === 'upcoming' ? (
+              <>
+                {next48h.length > 0 && (
+                  <div className="space-y-3">
+                    <h2 className="font-display font-bold text-sm text-foreground flex items-center gap-2">
+                      🔥 Next 48 Hours
+                    </h2>
+                    {next48h.map(match => (
+                      <MatchCard key={match.id} match={match} />
+                    ))}
+                  </div>
+                )}
+                {later.length > 0 && (
+                  <div className="space-y-3">
+                    <h2 className="font-display font-bold text-sm text-muted-foreground">Coming Up Later</h2>
+                    <div className="opacity-80 space-y-3">
+                      {later.map(match => (
+                        <MatchCard key={match.id} match={match} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {next48h.length === 0 && later.length === 0 && (
+                  <p className="text-center text-muted-foreground text-sm py-8">
+                    No upcoming matches right now.
+                  </p>
+                )}
+              </>
             ) : filteredMatches.length === 0 ? (
               <p className="text-center text-muted-foreground text-sm py-8">
                 No {activeTab} matches right now.
