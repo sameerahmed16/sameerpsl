@@ -21,11 +21,10 @@ Deno.serve(async (req) => {
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Get live matches from our DB
     const { data: liveMatches } = await supabase
       .from("matches")
-      .select("id, external_id, team_a, team_b, team_a_logo, team_b_logo")
-      .eq("status", "live");
+      .select("id, external_id, team_a, team_b, team_a_logo, team_b_logo, status")
+      .in("status", ["live"]);
 
     if (!liveMatches?.length) {
       return new Response(
@@ -41,7 +40,6 @@ Deno.serve(async (req) => {
       if (!extId) continue;
 
       try {
-        // Fetch match info
         const data = await apiFetch(
           `${CRICAPI_BASE}/match_info?apikey=${encodeURIComponent(CRICAPI_KEY)}&id=${extId}`, supabase
         );
@@ -69,11 +67,11 @@ Deno.serve(async (req) => {
           .update({ team_a_score: teamAScore, team_b_score: teamBScore, status })
           .eq("id", match.id);
 
-        // Update Playing XI from match squad
         await updatePlayingXI(supabase, CRICAPI_KEY, extId, match.id);
-
-        // Update player stats from scorecard
         await updatePlayerStats(supabase, CRICAPI_KEY, extId);
+
+        // Recalculate user team points for this match
+        await recalcUserTeamPoints(supabase, match.id);
 
         updated++;
       } catch (matchErr) {
@@ -95,6 +93,64 @@ Deno.serve(async (req) => {
   }
 });
 
+// Recalculate total_points for all user_teams of a match, applying C/VC multipliers
+async function recalcUserTeamPoints(
+  supabase: ReturnType<typeof createClient>,
+  matchId: string
+) {
+  try {
+    const { data: userTeams } = await supabase
+      .from("user_teams")
+      .select("id, captain_id, vice_captain_id, user_id")
+      .eq("match_id", matchId);
+
+    if (!userTeams?.length) return;
+
+    for (const ut of userTeams) {
+      const { data: teamPlayers } = await supabase
+        .from("team_players")
+        .select("player_id, players(points)")
+        .eq("user_team_id", ut.id);
+
+      if (!teamPlayers?.length) continue;
+
+      let total = 0;
+      for (const tp of teamPlayers) {
+        const pts = (tp.players as any)?.points || 0;
+        if (tp.player_id === ut.captain_id) {
+          total += pts * 2;
+        } else if (tp.player_id === ut.vice_captain_id) {
+          total += pts * 1.5;
+        } else {
+          total += pts;
+        }
+      }
+
+      await supabase
+        .from("user_teams")
+        .update({ total_points: Math.round(total) })
+        .eq("id", ut.id);
+    }
+
+    // Update profiles total_points (sum of all user_teams)
+    const userIds = [...new Set(userTeams.map(ut => ut.user_id))];
+    for (const userId of userIds) {
+      const { data: allTeams } = await supabase
+        .from("user_teams")
+        .select("total_points")
+        .eq("user_id", userId);
+
+      const totalProfile = (allTeams || []).reduce((s, t) => s + (t.total_points || 0), 0);
+      await supabase
+        .from("profiles")
+        .update({ total_points: totalProfile })
+        .eq("user_id", userId);
+    }
+  } catch (err) {
+    console.error("Error recalculating user team points:", err);
+  }
+}
+
 async function updatePlayingXI(
   supabase: ReturnType<typeof createClient>,
   apiKey: string,
@@ -107,7 +163,6 @@ async function updatePlayingXI(
     );
     if (data.status !== "success" || !data.data) return;
 
-    // Get all match player external IDs
     const { data: matchPlayers } = await supabase
       .from("match_players")
       .select("player_id, players(id, external_id)")
@@ -115,7 +170,6 @@ async function updatePlayingXI(
 
     if (!matchPlayers?.length) return;
 
-    // Collect playing XI external IDs from squad data
     const playingXIIds = new Set<string>();
     for (const squad of data.data) {
       for (const player of squad.players || []) {
@@ -125,16 +179,11 @@ async function updatePlayingXI(
       }
     }
 
-    // Update each player's is_playing status
     for (const mp of matchPlayers) {
       const player = mp.players as any;
       if (!player?.external_id) continue;
-
       const isPlaying = playingXIIds.has(player.external_id);
-      await supabase
-        .from("players")
-        .update({ is_playing: isPlaying })
-        .eq("id", player.id);
+      await supabase.from("players").update({ is_playing: isPlaying }).eq("id", player.id);
     }
   } catch (err) {
     console.error("Error updating Playing XI:", err);
@@ -157,16 +206,9 @@ async function updatePlayerStats(
         if (bat.batsman?.id) {
           const points = calculateBattingPoints(bat);
           const { data: existingPlayer } = await supabase
-            .from("players")
-            .select("id")
-            .eq("external_id", bat.batsman.id)
-            .maybeSingle();
-
+            .from("players").select("id").eq("external_id", bat.batsman.id).maybeSingle();
           if (existingPlayer) {
-            await supabase
-              .from("players")
-              .update({ points, is_playing: true })
-              .eq("id", existingPlayer.id);
+            await supabase.from("players").update({ points, is_playing: true }).eq("id", existingPlayer.id);
           }
         }
       }
@@ -174,18 +216,10 @@ async function updatePlayerStats(
         if (bowl.bowler?.id) {
           const points = calculateBowlingPoints(bowl);
           const { data: existingPlayer } = await supabase
-            .from("players")
-            .select("id, points")
-            .eq("external_id", bowl.bowler.id)
-            .maybeSingle();
-
+            .from("players").select("id, points").eq("external_id", bowl.bowler.id).maybeSingle();
           if (existingPlayer) {
-            await supabase
-              .from("players")
-              .update({
-                points: (existingPlayer.points || 0) + points,
-                is_playing: true,
-              })
+            await supabase.from("players")
+              .update({ points: (existingPlayer.points || 0) + points, is_playing: true })
               .eq("id", existingPlayer.id);
           }
         }
@@ -195,14 +229,9 @@ async function updatePlayerStats(
           const catchPoints = (field.catches || 0) * 8 + (field.runOut || 0) * 12;
           if (catchPoints > 0) {
             const { data: existingPlayer } = await supabase
-              .from("players")
-              .select("id, points")
-              .eq("external_id", field.catcher.id)
-              .maybeSingle();
-
+              .from("players").select("id, points").eq("external_id", field.catcher.id).maybeSingle();
             if (existingPlayer) {
-              await supabase
-                .from("players")
+              await supabase.from("players")
                 .update({ points: (existingPlayer.points || 0) + catchPoints })
                 .eq("id", existingPlayer.id);
             }
