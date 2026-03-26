@@ -1,35 +1,45 @@
 
 
-## Plan: Update PSL 2026 Squads to Actual Rosters
+## Plan: Team Preview on Cricket Ground (Dream11-style)
 
-### Problem
-The `pslSquads.ts` file contains outdated/fictional player assignments from previous PSL seasons. Many players are on wrong teams or retired.
+### What
+After saving a team (or viewing an existing one), show a cricket ground visualization with players positioned by role — WK at top, batsmen in the inner ring, all-rounders in the middle, bowlers at the bottom — with player names, C/VC badges, and team colors. Triggered via a "View Team" button or shown automatically after saving.
 
-### Source
-Wisden's official PSL 2026 squad list (published March 25, 2026) provides the correct rosters for all 8 teams.
+### UI Design
+- Oval/circular green cricket ground with pitch lines in the center
+- Players arranged in rows by role:
+  - **WK** (1-4): top of the ground, behind the stumps
+  - **BAT** (3-6): upper-mid section
+  - **AR** (1-4): center section
+  - **BOWL** (3-6): bottom/outfield section
+- Each player shown as: avatar circle with initials + name label below + C/VC badge if applicable
+- Team color indicators on each player circle
+- Ground uses green gradient with darker checkerboard-style pattern and brown boundary ring (matching the reference image)
 
-### Changes
+### Components
+1. **`src/components/TeamPreview.tsx`** — New component
+   - Props: `players`, `captainId`, `viceCaptainId`, `onClose`
+   - Renders the cricket ground SVG/CSS layout
+   - Groups players by role and positions them in rows
+   - Shows C (gold) and VC (purple) badges
+   - Includes a close/back button and share option
+   - Responsive: fills the viewport as a modal/overlay
 
-**File: `src/data/pslSquads.ts`** — Replace all 8 team squads with the actual PSL 2026 rosters:
+2. **`src/pages/MatchDetail.tsx`** — Add state & trigger
+   - Add `showPreview` state
+   - After successful save → set `showPreview = true`
+   - Add "Preview Team" button (visible when team is complete, 11 selected with C & VC)
+   - Render `<TeamPreview>` as a full-screen overlay when active
 
-| Team | Captain | Key Players |
-|------|---------|-------------|
-| **Rawalpindi Pindiz** | Mohammad Rizwan | Sam Billings, Naseem Shah, Daryl Mitchell, Kamran Ghulam |
-| **Peshawar Zalmi** | Babar Azam | James Vince, Kusal Mendis, Aaron Hardie, Iftikhar Ahmed, Shahnawaz Dahani |
-| **Quetta Gladiators** | Saud Shakeel | Rilee Rossouw, Alzarri Joseph, Tom Curran, Ben McDermott, Abrar Ahmed |
-| **Multan Sultans** | Ashton Turner | Steve Smith, Shan Masood, Mohammad Nawaz, Tabraiz Shamsi, Josh Philippe |
-| **Karachi Kings** | David Warner | Moeen Ali, Hasan Ali, Abbas Afridi, Adam Zampa, Azam Khan, Salman Ali Agha |
-| **Lahore Qalandars** | Shaheen Afridi | Fakhar Zaman, Abdullah Shafique, Haris Rauf, Mustafizur Rahman, Sikandar Raza, Usama Mir |
-| **Hyderabad Kingsmen** | Marnus Labuschagne | Saim Ayub, Glenn Maxwell, Kusal Perera, Maheesh Theekshana, Sharjeel Khan |
-| **Islamabad United** | Shadab Khan | Devon Conway, Imad Wasim, Faheem Ashraf, Haider Ali, Mohammad Hasnain |
+### Technical Details
+- Ground built with pure CSS (radial gradients, borders) — no external images needed
+- Player positioning uses CSS grid/flexbox rows within an aspect-ratio container
+- Each role row is horizontally centered with equal spacing
+- The overlay uses `fixed inset-0 z-50` with a dark backdrop
+- Player initials derived from name (first letters of each word)
+- Team abbreviation color from existing `TEAM_COLORS` map in `TeamLogo.tsx`
 
-### Role Assignment Logic
-- Known keepers (Rizwan, Billings, Azam Khan, Philippe, etc.) → WK
-- Known all-rounders (Shadab, Imad, Faheem, Moeen, etc.) → AR
-- Known bowlers (Shaheen, Naseem, Haris Rauf, etc.) → BOWL
-- Everyone else → BAT
-- Credits: 9-10.5 for star players, 7-8.5 for mid-tier, 6-7 for squad players
-
-### Files to Edit
-- **`src/data/pslSquads.ts`** — full replacement of all squad arrays with correct 2026 rosters
+### Files
+- **Create**: `src/components/TeamPreview.tsx`
+- **Edit**: `src/pages/MatchDetail.tsx` (add preview state, button, overlay render)
 
