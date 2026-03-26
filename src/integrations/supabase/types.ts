@@ -106,6 +106,7 @@ export type Database = {
       matches: {
         Row: {
           created_at: string
+          external_id: string | null
           id: string
           match_date: string
           status: string
@@ -120,6 +121,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          external_id?: string | null
           id?: string
           match_date: string
           status?: string
@@ -134,6 +136,7 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          external_id?: string | null
           id?: string
           match_date?: string
           status?: string
@@ -152,6 +155,7 @@ export type Database = {
         Row: {
           created_at: string
           credits: number
+          external_id: string | null
           id: string
           image_url: string | null
           is_playing: boolean | null
@@ -163,6 +167,7 @@ export type Database = {
         Insert: {
           created_at?: string
           credits: number
+          external_id?: string | null
           id?: string
           image_url?: string | null
           is_playing?: boolean | null
@@ -174,6 +179,7 @@ export type Database = {
         Update: {
           created_at?: string
           credits?: number
+          external_id?: string | null
           id?: string
           image_url?: string | null
           is_playing?: boolean | null
