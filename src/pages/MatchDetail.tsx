@@ -7,14 +7,14 @@ import { CountdownTimer } from '@/components/CountdownTimer';
 import { TeamLogo, getTeamFullName } from '@/components/TeamLogo';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Filter, AlertTriangle, Loader2, WifiOff } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { ArrowLeft, Filter, AlertTriangle, Loader2, WifiOff, Trophy, Users, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFallbackPlayers, type FallbackPlayer } from '@/data/pslSquads';
 import { TeamPreview } from '@/components/TeamPreview';
-
 
 type PlayerRole = 'BAT' | 'BOWL' | 'AR' | 'WK';
 
@@ -46,7 +46,6 @@ const ROLE_COLORS: Record<PlayerRole, string> = {
   WK: 'bg-destructive text-destructive-foreground',
 };
 
-// Generate a deterministic valid UUID from player name + team
 const generateId = (name: string, team: string): string => {
   const str = `${name}-${team}`;
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57, h3 = 0x12345678, h4 = 0x9abcdef0;
@@ -82,6 +81,116 @@ const fallbackToPlayer = (fp: FallbackPlayer): Player => ({
   image_url: null,
 });
 
+// ─── Live Scoreboard Components ─────────────────────────────────────────────
+
+const LiveMyTeam = ({ players, captainId, viceCaptainId }: { players: Player[]; captainId: string | null; viceCaptainId: string | null }) => {
+  const totalPoints = useMemo(() => {
+    return players.reduce((sum, p) => {
+      let pts = p.points;
+      if (p.id === captainId) pts *= 2;
+      else if (p.id === viceCaptainId) pts *= 1.5;
+      return sum + pts;
+    }, 0);
+  }, [players, captainId, viceCaptainId]);
+
+  const sorted = useMemo(() => {
+    const roleOrder: Record<string, number> = { WK: 0, BAT: 1, AR: 2, BOWL: 3 };
+    return [...players].sort((a, b) => roleOrder[a.role] - roleOrder[b.role]);
+  }, [players]);
+
+  return (
+    <div className="space-y-3">
+      <div className="gradient-card rounded-xl border border-primary/30 p-4 text-center">
+        <p className="text-xs text-muted-foreground font-display">Total Fantasy Points</p>
+        <p className="text-4xl font-display font-black text-primary mt-1">{Math.round(totalPoints)}</p>
+      </div>
+      <div className="space-y-1.5">
+        {sorted.map(player => {
+          const isCaptain = player.id === captainId;
+          const isVC = player.id === viceCaptainId;
+          const multipliedPts = isCaptain ? player.points * 2 : isVC ? player.points * 1.5 : player.points;
+          return (
+            <div key={player.id} className="flex items-center gap-3 gradient-card rounded-lg border border-border p-3">
+              <Badge className={cn("text-[10px] shrink-0", ROLE_COLORS[player.role])}>{player.role}</Badge>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <p className="font-display font-semibold text-sm truncate text-foreground">{player.name}</p>
+                  {isCaptain && <Badge className="bg-secondary text-secondary-foreground text-[9px] px-1 py-0">C</Badge>}
+                  {isVC && <Badge variant="outline" className="text-[9px] px-1 py-0 border-secondary text-secondary">VC</Badge>}
+                </div>
+                <p className="text-[10px] text-muted-foreground">{player.team}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="font-display font-bold text-sm text-foreground">{Math.round(multipliedPts)}</p>
+                {(isCaptain || isVC) && (
+                  <p className="text-[9px] text-muted-foreground">{player.points} × {isCaptain ? '2' : '1.5'}</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const MatchLeaderboard = ({ matchId }: { matchId: string }) => {
+  const { data: entries = [], isLoading } = useQuery({
+    queryKey: ['match-leaderboard', matchId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('user_teams')
+        .select('total_points, user_id')
+        .eq('match_id', matchId)
+        .order('total_points', { ascending: false })
+        .limit(50);
+      if (error) throw error;
+
+      // Get usernames
+      const userIds = data.map(d => d.user_id);
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('user_id, username')
+        .in('user_id', userIds);
+
+      const profileMap = new Map((profiles || []).map(p => [p.user_id, p.username]));
+      return data.map((d, i) => ({
+        rank: i + 1,
+        username: profileMap.get(d.user_id) || 'Unknown',
+        points: d.total_points,
+      }));
+    },
+    refetchInterval: 15000,
+  });
+
+  if (isLoading) return <p className="text-center text-muted-foreground text-sm py-8">Loading...</p>;
+  if (entries.length === 0) return <p className="text-center text-muted-foreground text-sm py-8">No teams created yet.</p>;
+
+  return (
+    <div className="space-y-1.5">
+      {entries.map(entry => (
+        <div key={entry.rank} className={cn(
+          "flex items-center gap-3 rounded-lg border border-border p-3 transition-all",
+          entry.rank === 1 ? "gradient-gold shadow-gold" : "gradient-card"
+        )}>
+          <div className={cn(
+            "w-7 h-7 rounded-full flex items-center justify-center font-display font-black text-xs shrink-0",
+            entry.rank <= 3 ? "bg-secondary/20 text-secondary" : "bg-muted text-muted-foreground"
+          )}>
+            {entry.rank}
+          </div>
+          <p className="flex-1 font-display font-semibold text-sm truncate text-foreground">{entry.username}</p>
+          <span className={cn("font-display font-bold text-sm", entry.rank <= 3 ? "text-secondary" : "text-foreground")}>
+            {entry.points} pts
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ─── Main Component ─────────────────────────────────────────────────────────
+
 const MatchDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -97,7 +206,6 @@ const MatchDetail = () => {
   const [syncDone, setSyncDone] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
-  // Fetch match data
   const { data: match } = useQuery({
     queryKey: ['match', id],
     queryFn: async () => {
@@ -105,10 +213,12 @@ const MatchDetail = () => {
       if (error) throw error;
       return data as typeof data & { lock_time?: string };
     },
-    refetchInterval: 30000,
+    refetchInterval: (query) => {
+      const m = query.state.data;
+      return m?.status === 'live' ? 10000 : 30000;
+    },
   });
 
-  // Fetch players for this match
   const { data: dbPlayers = [], isLoading: playersLoading } = useQuery({
     queryKey: ['match-players', id],
     queryFn: async () => {
@@ -119,13 +229,12 @@ const MatchDetail = () => {
       if (error) throw error;
       return (data || []).map(mp => mp.players).filter(Boolean) as Player[];
     },
+    refetchInterval: match?.status === 'live' ? 10000 : 30000,
   });
 
-  // Try background sync once, but don't block UI
   useEffect(() => {
     if (!playersLoading && dbPlayers.length === 0 && !syncAttempted.current && match?.external_id) {
       syncAttempted.current = true;
-      
       const trySync = async () => {
         try {
           await supabase.functions.invoke('sync-players', { body: { match_id: id } });
@@ -142,7 +251,6 @@ const MatchDetail = () => {
     }
   }, [playersLoading, dbPlayers.length, id, queryClient, match?.external_id]);
 
-  // Determine final player list: DB players or fallback
   const allPlayers = useMemo(() => {
     if (dbPlayers.length > 0) return dbPlayers;
     if (!match) return [];
@@ -155,7 +263,6 @@ const MatchDetail = () => {
     setUsingFallback(dbPlayers.length === 0 && allPlayers.length > 0);
   }, [dbPlayers.length, allPlayers.length]);
 
-  // Fetch existing user team
   const { data: existingTeam } = useQuery({
     queryKey: ['user-team', id],
     enabled: !!user,
@@ -168,9 +275,9 @@ const MatchDetail = () => {
         .maybeSingle();
       return data;
     },
+    refetchInterval: match?.status === 'live' ? 10000 : undefined,
   });
 
-  // Load existing team into state
   useEffect(() => {
     if (existingTeam) {
       const playerIds = new Set(existingTeam.team_players?.map((tp: any) => tp.player_id) || []);
@@ -180,7 +287,7 @@ const MatchDetail = () => {
     }
   }, [existingTeam]);
 
-  // Realtime subscription
+  // Realtime subscriptions
   useEffect(() => {
     const channel = supabase
       .channel(`match-${id}`)
@@ -190,11 +297,14 @@ const MatchDetail = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, () => {
         queryClient.invalidateQueries({ queryKey: ['match-players', id] });
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_teams' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['user-team', id] });
+        queryClient.invalidateQueries({ queryKey: ['match-leaderboard', id] });
+      })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [id, queryClient]);
 
-  // Determine lock state
   const isLocked = useMemo(() => {
     if (!match) return false;
     if (match.status === 'live' || match.status === 'completed') return true;
@@ -202,52 +312,37 @@ const MatchDetail = () => {
     return new Date(lockTime).getTime() <= Date.now();
   }, [match]);
 
-  // Save team mutation
+  const isLiveOrCompleted = match?.status === 'live' || match?.status === 'completed';
+  const hasTeam = !!existingTeam;
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!user || !id || !captain || !viceCaptain) throw new Error('Missing data');
       if (isLocked) throw new Error('Team is locked');
 
-      // If using fallback players, insert them into DB first
       if (usingFallback) {
         const playersToInsert = allPlayers.filter(p => selected.has(p.id));
         for (const p of playersToInsert) {
           await supabase.from('players').upsert({
-            id: p.id,
-            name: p.name,
-            team: p.team,
-            role: p.role,
-            credits: p.credits,
-            points: 0,
+            id: p.id, name: p.name, team: p.team, role: p.role, credits: p.credits, points: 0,
           }, { onConflict: 'id' });
-          
           await supabase.from('match_players').upsert({
-            match_id: id,
-            player_id: p.id,
+            match_id: id, player_id: p.id,
           }, { onConflict: 'match_id,player_id' }).select();
         }
       }
 
       const { data: team, error: teamError } = await supabase
         .from('user_teams')
-        .upsert({
-          user_id: user.id,
-          match_id: id,
-          captain_id: captain,
-          vice_captain_id: viceCaptain,
-        }, { onConflict: 'user_id,match_id' })
+        .upsert({ user_id: user.id, match_id: id, captain_id: captain, vice_captain_id: viceCaptain }, { onConflict: 'user_id,match_id' })
         .select()
         .single();
       if (teamError) throw teamError;
 
       await supabase.from('team_players').delete().eq('user_team_id', team.id);
-
       const { error: playersError } = await supabase
         .from('team_players')
-        .insert(Array.from(selected).map(playerId => ({
-          user_team_id: team.id,
-          player_id: playerId,
-        })));
+        .insert(Array.from(selected).map(playerId => ({ user_team_id: team.id, player_id: playerId })));
       if (playersError) throw playersError;
     },
     onSuccess: () => {
@@ -333,137 +428,256 @@ const MatchDetail = () => {
           <ArrowLeft className="w-4 h-4" /> Back
         </button>
 
-        {/* Match Header */}
-        <div className="gradient-card rounded-xl border border-border p-4">
+        {/* Match Header with Live Score */}
+        <div className={cn(
+          "gradient-card rounded-xl border p-4",
+          match.status === 'live' ? "border-destructive/40 shadow-[0_0_20px_-5px_hsl(var(--destructive)/0.3)]" : "border-border"
+        )}>
+          {match.status === 'live' && (
+            <div className="flex justify-center mb-2">
+              <Badge className="bg-destructive text-destructive-foreground animate-pulse text-xs">● LIVE</Badge>
+            </div>
+          )}
+          {match.status === 'completed' && (
+            <div className="flex justify-center mb-2">
+              <Badge className="bg-muted text-muted-foreground text-xs">Match Completed</Badge>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground mb-3 text-center">{match.venue}</p>
           <div className="flex items-center justify-between">
             <div className="flex flex-col items-center gap-1 flex-1">
               <TeamLogo team={match.team_a} size="lg" />
               <span className="font-display font-bold text-foreground text-sm text-center">{teamAName}</span>
-              {match.team_a_score && <span className="text-xs text-muted-foreground">{match.team_a_score}</span>}
+              {match.team_a_score && (
+                <span className={cn("text-sm font-display font-bold", match.status === 'live' ? "text-primary" : "text-foreground")}>{match.team_a_score}</span>
+              )}
             </div>
             <div className="flex flex-col items-center px-3">
               <span className="text-xs text-muted-foreground font-display">vs</span>
-              <div className="mt-1">
-                <CountdownTimer targetDate={match.lock_time || match.match_date} isLocked={isLocked} />
-              </div>
+              {match.status === 'upcoming' && (
+                <div className="mt-1">
+                  <CountdownTimer targetDate={match.lock_time || match.match_date} isLocked={isLocked} />
+                </div>
+              )}
             </div>
             <div className="flex flex-col items-center gap-1 flex-1">
               <TeamLogo team={match.team_b} size="lg" />
               <span className="font-display font-bold text-foreground text-sm text-center">{teamBName}</span>
-              {match.team_b_score && <span className="text-xs text-muted-foreground">{match.team_b_score}</span>}
+              {match.team_b_score && (
+                <span className={cn("text-sm font-display font-bold", match.status === 'live' ? "text-primary" : "text-foreground")}>{match.team_b_score}</span>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Fallback notice */}
-        {usingFallback && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border text-muted-foreground text-xs">
-            <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Using estimated squads. Live data will update automatically when available.</span>
-          </div>
-        )}
+        {/* ─── LIVE / COMPLETED VIEW ─── */}
+        {isLiveOrCompleted && hasTeam ? (
+          <Tabs defaultValue="my-team" className="w-full">
+            <TabsList className="w-full">
+              <TabsTrigger value="my-team" className="flex-1 gap-1 text-xs">
+                <Star className="w-3.5 h-3.5" /> My Team
+              </TabsTrigger>
+              <TabsTrigger value="all-players" className="flex-1 gap-1 text-xs">
+                <Users className="w-3.5 h-3.5" /> All Players
+              </TabsTrigger>
+              <TabsTrigger value="leaderboard" className="flex-1 gap-1 text-xs">
+                <Trophy className="w-3.5 h-3.5" /> Leaderboard
+              </TabsTrigger>
+            </TabsList>
 
-        {/* Warnings */}
-        {notPlayingCount > 0 && !isLocked && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-display">
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            <span>{notPlayingCount} player(s) in your team not in Playing XI!</span>
-          </div>
-        )}
-
-        {/* Budget & Constraints */}
-        <div className="gradient-card rounded-lg border border-border p-3">
-          <div className="flex justify-between text-sm mb-2">
-            <span className="text-muted-foreground">Players: <span className="text-foreground font-display font-bold">{selected.size}/11</span></span>
-            <span className="text-muted-foreground">Credits: <span className={cn("font-display font-bold", remainingCredits < 10 ? "text-destructive" : "text-secondary")}>{remainingCredits.toFixed(1)}</span></span>
-          </div>
-          <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-            <div className="h-full gradient-primary transition-all duration-300 rounded-full" style={{ width: `${(usedCredits / BUDGET) * 100}%` }} />
-          </div>
-          <div className="flex gap-2 mt-2">
-            {(Object.entries(ROLE_CONSTRAINTS) as [PlayerRole, [number, number]][]).map(([role, [min, max]]) => (
-              <Badge key={role} variant="outline" className={cn("text-[10px]", roleCounts[role] >= min ? "border-primary text-primary" : "border-border text-muted-foreground")}>
-                {role}: {roleCounts[role]}/{min}-{max}
-              </Badge>
-            ))}
-          </div>
-        </div>
-
-        {/* Role Filter */}
-        <div className="flex gap-2 items-center">
-          <Filter className="w-4 h-4 text-muted-foreground" />
-          {ROLE_FILTERS.map(r => (
-            <button
-              key={r}
-              onClick={() => setRoleFilter(r)}
-              className={cn(
-                "text-xs px-3 py-1 rounded-full font-display font-semibold transition-colors",
-                roleFilter === r ? "gradient-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
-
-        {/* Player List */}
-        {isStillLoading ? (
-          <div className="flex flex-col items-center gap-2 py-8">
-            <Loader2 className="w-6 h-6 text-primary animate-spin" />
-            <p className="text-muted-foreground text-sm">Loading players...</p>
-          </div>
-        ) : allPlayers.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 py-8 text-center">
-            <WifiOff className="w-8 h-8 text-muted-foreground" />
-            <p className="text-muted-foreground text-sm">
-              No players available yet. They'll appear once squads are announced.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {filteredPlayers.map(player => (
-              <PlayerCard
-                key={player.id}
-                player={player}
-                roleColors={ROLE_COLORS}
-                selected={selected.has(player.id)}
-                isCaptain={captain === player.id}
-                isViceCaptain={viceCaptain === player.id}
-                onSelect={handleSelect}
-                onCaptain={handleCaptain}
-                onViceCaptain={handleViceCaptain}
-                disabled={!canSelect(player)}
-                isLocked={isLocked}
-                showPoints={match.status === 'live' || match.status === 'completed'}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Preview & Save Buttons */}
-        {!isLocked && (
-          <div className="sticky bottom-20 z-10 space-y-2">
-            {isValid && (
+            <TabsContent value="my-team">
+              <LiveMyTeam players={selectedPlayers} captainId={captain} viceCaptainId={viceCaptain} />
               <Button
                 onClick={() => setShowPreview(true)}
                 variant="outline"
-                className="w-full font-display font-bold text-base py-5 border-primary/30 text-primary"
+                className="w-full mt-3 font-display font-bold border-primary/30 text-primary"
               >
-                👁️ Preview Team
+                👁️ View on Ground
               </Button>
-            )}
-            <Button
-              onClick={() => saveMutation.mutate()}
-              disabled={!isValid || saveMutation.isPending}
-              className="w-full gradient-primary text-primary-foreground font-display font-bold text-base py-6 shadow-glow disabled:opacity-40"
-            >
-              {saveMutation.isPending ? 'Saving...' : `Save Team (${selected.size}/11)`}
-            </Button>
+            </TabsContent>
+
+            <TabsContent value="all-players">
+              <div className="flex gap-2 items-center mb-3">
+                <Filter className="w-4 h-4 text-muted-foreground" />
+                {ROLE_FILTERS.map(r => (
+                  <button
+                    key={r}
+                    onClick={() => setRoleFilter(r)}
+                    className={cn(
+                      "text-xs px-3 py-1 rounded-full font-display font-semibold transition-colors",
+                      roleFilter === r ? "gradient-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+              <div className="space-y-2">
+                {filteredPlayers.map(player => (
+                  <PlayerCard
+                    key={player.id}
+                    player={player}
+                    roleColors={ROLE_COLORS}
+                    selected={selected.has(player.id)}
+                    isCaptain={captain === player.id}
+                    isViceCaptain={viceCaptain === player.id}
+                    onSelect={() => {}}
+                    onCaptain={() => {}}
+                    onViceCaptain={() => {}}
+                    disabled={true}
+                    isLocked={true}
+                    showPoints={true}
+                  />
+                ))}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="leaderboard">
+              <MatchLeaderboard matchId={id!} />
+            </TabsContent>
+          </Tabs>
+        ) : isLiveOrCompleted && !hasTeam ? (
+          /* Live/completed but no team created */
+          <div className="text-center py-8 space-y-3">
+            <p className="text-muted-foreground text-sm">You didn't create a team for this match.</p>
+            <Tabs defaultValue="leaderboard" className="w-full">
+              <TabsList className="w-full">
+                <TabsTrigger value="all-players" className="flex-1 gap-1 text-xs">
+                  <Users className="w-3.5 h-3.5" /> All Players
+                </TabsTrigger>
+                <TabsTrigger value="leaderboard" className="flex-1 gap-1 text-xs">
+                  <Trophy className="w-3.5 h-3.5" /> Leaderboard
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="all-players">
+                <div className="space-y-2">
+                  {allPlayers.map(player => (
+                    <PlayerCard
+                      key={player.id}
+                      player={player}
+                      roleColors={ROLE_COLORS}
+                      selected={false}
+                      isCaptain={false}
+                      isViceCaptain={false}
+                      onSelect={() => {}}
+                      onCaptain={() => {}}
+                      onViceCaptain={() => {}}
+                      disabled={true}
+                      isLocked={true}
+                      showPoints={true}
+                    />
+                  ))}
+                </div>
+              </TabsContent>
+              <TabsContent value="leaderboard">
+                <MatchLeaderboard matchId={id!} />
+              </TabsContent>
+            </Tabs>
           </div>
+        ) : (
+          /* ─── UPCOMING / TEAM SELECTION VIEW ─── */
+          <>
+            {usingFallback && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border text-muted-foreground text-xs">
+                <WifiOff className="w-4 h-4 shrink-0" />
+                <span>Using estimated squads. Live data will update automatically when available.</span>
+              </div>
+            )}
+
+            {notPlayingCount > 0 && !isLocked && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-display">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{notPlayingCount} player(s) in your team not in Playing XI!</span>
+              </div>
+            )}
+
+            <div className="gradient-card rounded-lg border border-border p-3">
+              <div className="flex justify-between text-sm mb-2">
+                <span className="text-muted-foreground">Players: <span className="text-foreground font-display font-bold">{selected.size}/11</span></span>
+                <span className="text-muted-foreground">Credits: <span className={cn("font-display font-bold", remainingCredits < 10 ? "text-destructive" : "text-secondary")}>{remainingCredits.toFixed(1)}</span></span>
+              </div>
+              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className="h-full gradient-primary transition-all duration-300 rounded-full" style={{ width: `${(usedCredits / BUDGET) * 100}%` }} />
+              </div>
+              <div className="flex gap-2 mt-2">
+                {(Object.entries(ROLE_CONSTRAINTS) as [PlayerRole, [number, number]][]).map(([role, [min, max]]) => (
+                  <Badge key={role} variant="outline" className={cn("text-[10px]", roleCounts[role] >= min ? "border-primary text-primary" : "border-border text-muted-foreground")}>
+                    {role}: {roleCounts[role]}/{min}-{max}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-2 items-center">
+              <Filter className="w-4 h-4 text-muted-foreground" />
+              {ROLE_FILTERS.map(r => (
+                <button
+                  key={r}
+                  onClick={() => setRoleFilter(r)}
+                  className={cn(
+                    "text-xs px-3 py-1 rounded-full font-display font-semibold transition-colors",
+                    roleFilter === r ? "gradient-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+
+            {isStillLoading ? (
+              <div className="flex flex-col items-center gap-2 py-8">
+                <Loader2 className="w-6 h-6 text-primary animate-spin" />
+                <p className="text-muted-foreground text-sm">Loading players...</p>
+              </div>
+            ) : allPlayers.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 py-8 text-center">
+                <WifiOff className="w-8 h-8 text-muted-foreground" />
+                <p className="text-muted-foreground text-sm">No players available yet.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredPlayers.map(player => (
+                  <PlayerCard
+                    key={player.id}
+                    player={player}
+                    roleColors={ROLE_COLORS}
+                    selected={selected.has(player.id)}
+                    isCaptain={captain === player.id}
+                    isViceCaptain={viceCaptain === player.id}
+                    onSelect={handleSelect}
+                    onCaptain={handleCaptain}
+                    onViceCaptain={handleViceCaptain}
+                    disabled={!canSelect(player)}
+                    isLocked={isLocked}
+                    showPoints={false}
+                  />
+                ))}
+              </div>
+            )}
+
+            {!isLocked && (
+              <div className="sticky bottom-20 z-10 space-y-2">
+                {isValid && (
+                  <Button
+                    onClick={() => setShowPreview(true)}
+                    variant="outline"
+                    className="w-full font-display font-bold text-base py-5 border-primary/30 text-primary"
+                  >
+                    👁️ Preview Team
+                  </Button>
+                )}
+                <Button
+                  onClick={() => saveMutation.mutate()}
+                  disabled={!isValid || saveMutation.isPending}
+                  className="w-full gradient-primary text-primary-foreground font-display font-bold text-base py-6 shadow-glow disabled:opacity-40"
+                >
+                  {saveMutation.isPending ? 'Saving...' : `Save Team (${selected.size}/11)`}
+                </Button>
+              </div>
+            )}
+          </>
         )}
 
-        {/* Team Preview Overlay */}
         {showPreview && (
           <TeamPreview
             players={selectedPlayers}
