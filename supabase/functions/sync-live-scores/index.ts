@@ -41,12 +41,11 @@ Deno.serve(async (req) => {
       if (!extId) continue;
 
       try {
-        const res = await fetch(
-          `${CRICAPI_BASE}/match_info?apikey=${CRICAPI_KEY}&id=${extId}`
+        // Fetch match info
+        const data = await fetchViaDb(
+          supabase,
+          `${CRICAPI_BASE}/match_info?apikey=${encodeURIComponent(CRICAPI_KEY)}&id=${extId}`
         );
-        if (!res.ok) continue;
-
-        const data = await res.json();
         if (data.status !== "success" || !data.data) continue;
 
         const m = data.data;
@@ -68,80 +67,14 @@ Deno.serve(async (req) => {
 
         await supabase
           .from("matches")
-          .update({
-            team_a_score: teamAScore,
-            team_b_score: teamBScore,
-            status,
-          })
+          .update({ team_a_score: teamAScore, team_b_score: teamBScore, status })
           .eq("id", match.id);
 
+        // Update Playing XI from match squad
+        await updatePlayingXI(supabase, CRICAPI_KEY, extId, match.id);
+
         // Update player stats from scorecard
-        const scorecardRes = await fetch(
-          `${CRICAPI_BASE}/match_scorecard?apikey=${CRICAPI_KEY}&id=${extId}`
-        );
-        if (scorecardRes.ok) {
-          const scData = await scorecardRes.json();
-          if (scData.status === "success" && scData.data?.scorecard) {
-            for (const innings of scData.data.scorecard) {
-              for (const bat of innings.batting || []) {
-                if (bat.batsman?.id) {
-                  const points = calculateBattingPoints(bat);
-                  const { data: existingPlayer } = await supabase
-                    .from("players")
-                    .select("id")
-                    .eq("external_id", bat.batsman.id)
-                    .maybeSingle();
-
-                  if (existingPlayer) {
-                    await supabase
-                      .from("players")
-                      .update({ points, is_playing: true })
-                      .eq("id", existingPlayer.id);
-                  }
-                }
-              }
-              for (const bowl of innings.bowling || []) {
-                if (bowl.bowler?.id) {
-                  const points = calculateBowlingPoints(bowl);
-                  const { data: existingPlayer } = await supabase
-                    .from("players")
-                    .select("id, points")
-                    .eq("external_id", bowl.bowler.id)
-                    .maybeSingle();
-
-                  if (existingPlayer) {
-                    await supabase
-                      .from("players")
-                      .update({
-                        points: (existingPlayer.points || 0) + points,
-                        is_playing: true,
-                      })
-                      .eq("id", existingPlayer.id);
-                  }
-                }
-              }
-              for (const field of innings.catching || []) {
-                if (field.catcher?.id) {
-                  const catchPoints = (field.catches || 0) * 8 + (field.runOut || 0) * 12;
-                  if (catchPoints > 0) {
-                    const { data: existingPlayer } = await supabase
-                      .from("players")
-                      .select("id, points")
-                      .eq("external_id", field.catcher.id)
-                      .maybeSingle();
-
-                    if (existingPlayer) {
-                      await supabase
-                        .from("players")
-                        .update({ points: (existingPlayer.points || 0) + catchPoints })
-                        .eq("id", existingPlayer.id);
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+        await updatePlayerStats(supabase, CRICAPI_KEY, extId);
 
         updated++;
       } catch (matchErr) {
@@ -162,6 +95,134 @@ Deno.serve(async (req) => {
     });
   }
 });
+
+async function updatePlayingXI(
+  supabase: ReturnType<typeof createClient>,
+  apiKey: string,
+  externalMatchId: string,
+  matchId: string
+) {
+  try {
+    const data = await fetchViaDb(
+      supabase,
+      `${CRICAPI_BASE}/match_squad?apikey=${encodeURIComponent(apiKey)}&id=${externalMatchId}`
+    );
+    if (data.status !== "success" || !data.data) return;
+
+    // Get all match player external IDs
+    const { data: matchPlayers } = await supabase
+      .from("match_players")
+      .select("player_id, players(id, external_id)")
+      .eq("match_id", matchId);
+
+    if (!matchPlayers?.length) return;
+
+    // Collect playing XI external IDs from squad data
+    const playingXIIds = new Set<string>();
+    for (const squad of data.data) {
+      for (const player of squad.players || []) {
+        if (player.id && player.playing11 !== false) {
+          playingXIIds.add(player.id);
+        }
+      }
+    }
+
+    // Update each player's is_playing status
+    for (const mp of matchPlayers) {
+      const player = mp.players as any;
+      if (!player?.external_id) continue;
+
+      const isPlaying = playingXIIds.has(player.external_id);
+      await supabase
+        .from("players")
+        .update({ is_playing: isPlaying })
+        .eq("id", player.id);
+    }
+  } catch (err) {
+    console.error("Error updating Playing XI:", err);
+  }
+}
+
+async function updatePlayerStats(
+  supabase: ReturnType<typeof createClient>,
+  apiKey: string,
+  externalMatchId: string
+) {
+  try {
+    const scData = await fetchViaDb(
+      supabase,
+      `${CRICAPI_BASE}/match_scorecard?apikey=${encodeURIComponent(apiKey)}&id=${externalMatchId}`
+    );
+    if (scData.status !== "success" || !scData.data?.scorecard) return;
+
+    for (const innings of scData.data.scorecard) {
+      for (const bat of innings.batting || []) {
+        if (bat.batsman?.id) {
+          const points = calculateBattingPoints(bat);
+          const { data: existingPlayer } = await supabase
+            .from("players")
+            .select("id")
+            .eq("external_id", bat.batsman.id)
+            .maybeSingle();
+
+          if (existingPlayer) {
+            await supabase
+              .from("players")
+              .update({ points, is_playing: true })
+              .eq("id", existingPlayer.id);
+          }
+        }
+      }
+      for (const bowl of innings.bowling || []) {
+        if (bowl.bowler?.id) {
+          const points = calculateBowlingPoints(bowl);
+          const { data: existingPlayer } = await supabase
+            .from("players")
+            .select("id, points")
+            .eq("external_id", bowl.bowler.id)
+            .maybeSingle();
+
+          if (existingPlayer) {
+            await supabase
+              .from("players")
+              .update({
+                points: (existingPlayer.points || 0) + points,
+                is_playing: true,
+              })
+              .eq("id", existingPlayer.id);
+          }
+        }
+      }
+      for (const field of innings.catching || []) {
+        if (field.catcher?.id) {
+          const catchPoints = (field.catches || 0) * 8 + (field.runOut || 0) * 12;
+          if (catchPoints > 0) {
+            const { data: existingPlayer } = await supabase
+              .from("players")
+              .select("id, points")
+              .eq("external_id", field.catcher.id)
+              .maybeSingle();
+
+            if (existingPlayer) {
+              await supabase
+                .from("players")
+                .update({ points: (existingPlayer.points || 0) + catchPoints })
+                .eq("id", existingPlayer.id);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error updating player stats:", err);
+  }
+}
+
+async function fetchViaDb(supabase: ReturnType<typeof createClient>, url: string): Promise<any> {
+  const { data, error } = await supabase.rpc("http_get_json", { target_url: url });
+  if (error) throw new Error(`Database HTTP fetch failed: ${error.message}`);
+  return data as any;
+}
 
 function calculateBattingPoints(bat: any): number {
   const runs = bat.r || 0;

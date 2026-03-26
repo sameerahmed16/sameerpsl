@@ -124,6 +124,7 @@ Deno.serve(async (req) => {
         team_a_logo: teamALogo, team_b_logo: teamBLogo,
         match_date: matchDate, venue: match.venue || "TBD",
         status, team_a_score: teamAScore, team_b_score: teamBScore,
+        lock_time: matchDate, // lock at match start
       };
 
       if (existingMap.has(externalId)) {
