@@ -107,13 +107,11 @@ const Index = () => {
                   </div>
                 )}
                 {later.length > 0 && (
-                  <div className="space-y-3">
+                  <div className="space-y-1.5">
                     <h2 className="font-display font-bold text-sm text-muted-foreground">Coming Up Later</h2>
-                    <div className="opacity-80 space-y-3">
-                      {later.map(match => (
-                        <MatchCard key={match.id} match={match} />
-                      ))}
-                    </div>
+                    {later.map(match => (
+                      <MatchCardCompact key={match.id} match={match} />
+                    ))}
                   </div>
                 )}
                 {next48h.length === 0 && later.length === 0 && (
