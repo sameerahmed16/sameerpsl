@@ -42,9 +42,8 @@ Deno.serve(async (req) => {
 
       try {
         // Fetch match info
-        const data = await fetchViaDb(
-          supabase,
-          `${CRICAPI_BASE}/match_info?apikey=${encodeURIComponent(CRICAPI_KEY)}&id=${extId}`
+        const data = await apiFetch(
+          `${CRICAPI_BASE}/match_info?apikey=${encodeURIComponent(CRICAPI_KEY)}&id=${extId}`, supabase
         );
         if (data.status !== "success" || !data.data) continue;
 
@@ -103,9 +102,8 @@ async function updatePlayingXI(
   matchId: string
 ) {
   try {
-    const data = await fetchViaDb(
-      supabase,
-      `${CRICAPI_BASE}/match_squad?apikey=${encodeURIComponent(apiKey)}&id=${externalMatchId}`
+    const data = await apiFetch(
+      `${CRICAPI_BASE}/match_squad?apikey=${encodeURIComponent(apiKey)}&id=${externalMatchId}`, supabase
     );
     if (data.status !== "success" || !data.data) return;
 
@@ -149,9 +147,8 @@ async function updatePlayerStats(
   externalMatchId: string
 ) {
   try {
-    const scData = await fetchViaDb(
-      supabase,
-      `${CRICAPI_BASE}/match_scorecard?apikey=${encodeURIComponent(apiKey)}&id=${externalMatchId}`
+    const scData = await apiFetch(
+      `${CRICAPI_BASE}/match_scorecard?apikey=${encodeURIComponent(apiKey)}&id=${externalMatchId}`, supabase
     );
     if (scData.status !== "success" || !scData.data?.scorecard) return;
 
@@ -218,10 +215,21 @@ async function updatePlayerStats(
   }
 }
 
-async function fetchViaDb(supabase: ReturnType<typeof createClient>, url: string): Promise<any> {
-  const { data, error } = await supabase.rpc("http_get_json", { target_url: url });
-  if (error) throw new Error(`Database HTTP fetch failed: ${error.message}`);
-  return data as any;
+async function apiFetch(url: string, supabase?: any, retries = 3): Promise<any> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const resp = await fetch(url);
+      if (resp.ok) return resp.json();
+    } catch (_) {}
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.rpc("http_get_json", { target_url: url });
+        if (!error && data) return data;
+      } catch (_) {}
+    }
+    if (i < retries - 1) await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+  }
+  throw new Error(`Failed to fetch after ${retries} retries`);
 }
 
 function calculateBattingPoints(bat: any): number {

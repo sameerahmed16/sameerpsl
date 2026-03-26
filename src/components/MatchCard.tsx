@@ -2,6 +2,7 @@ import { Badge } from '@/components/ui/badge';
 import { Calendar, MapPin, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
+import { TeamLogo } from '@/components/TeamLogo';
 
 interface MatchData {
   id: string;
@@ -22,17 +23,6 @@ const statusStyles: Record<string, string> = {
   completed: 'bg-muted text-muted-foreground opacity-70',
 };
 
-function TeamLogo({ abbr, teamName }: { abbr: string; teamName: string }) {
-  return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center font-display font-bold text-lg text-foreground border border-border">
-        {abbr}
-      </div>
-      <span className="text-xs text-muted-foreground text-center max-w-[80px] leading-tight">{teamName}</span>
-    </div>
-  );
-}
-
 export const MatchCard = ({ match }: { match: MatchData }) => {
   const matchDate = new Date(match.match_date);
 
@@ -51,7 +41,10 @@ export const MatchCard = ({ match }: { match: MatchData }) => {
         </div>
 
         <div className="flex items-center justify-between">
-          <TeamLogo abbr={match.team_a_logo} teamName={match.team_a} />
+          <div className="flex flex-col items-center gap-2">
+            <TeamLogo team={match.team_a} size="md" />
+            <span className="text-xs text-muted-foreground text-center max-w-[80px] leading-tight font-display font-bold">{match.team_a_logo}</span>
+          </div>
           
           <div className="flex flex-col items-center gap-1">
             {match.status === 'upcoming' ? (
@@ -71,7 +64,10 @@ export const MatchCard = ({ match }: { match: MatchData }) => {
             )}
           </div>
 
-          <TeamLogo abbr={match.team_b_logo} teamName={match.team_b} />
+          <div className="flex flex-col items-center gap-2">
+            <TeamLogo team={match.team_b} size="md" />
+            <span className="text-xs text-muted-foreground text-center max-w-[80px] leading-tight font-display font-bold">{match.team_b_logo}</span>
+          </div>
         </div>
 
         <div className="flex items-center gap-1.5 mt-4 text-xs text-muted-foreground">

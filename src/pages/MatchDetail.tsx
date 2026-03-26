@@ -1,12 +1,13 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Layout } from '@/components/Layout';
 import { PlayerCard } from '@/components/PlayerCard';
 import { CountdownTimer } from '@/components/CountdownTimer';
+import { TeamLogo } from '@/components/TeamLogo';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Filter, RefreshCw, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Filter, AlertTriangle, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
@@ -47,6 +48,7 @@ const MatchDetail = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const autoSyncDone = useRef(false);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [captain, setCaptain] = useState<string | null>(null);
@@ -61,6 +63,7 @@ const MatchDetail = () => {
       if (error) throw error;
       return data as typeof data & { lock_time?: string };
     },
+    refetchInterval: 30000,
   });
 
   // Fetch players for this match
@@ -75,6 +78,16 @@ const MatchDetail = () => {
       return (data || []).map(mp => mp.players).filter(Boolean) as Player[];
     },
   });
+
+  // Auto-sync players if none found
+  useEffect(() => {
+    if (!playersLoading && allPlayers.length === 0 && !autoSyncDone.current) {
+      autoSyncDone.current = true;
+      supabase.functions.invoke('sync-players', { body: { match_id: id } }).then(() => {
+        queryClient.invalidateQueries({ queryKey: ['match-players', id] });
+      });
+    }
+  }, [playersLoading, allPlayers.length, id, queryClient]);
 
   // Fetch existing user team
   const { data: existingTeam } = useQuery({
@@ -101,9 +114,9 @@ const MatchDetail = () => {
     }
   }, [existingTeam]);
 
-  // Realtime subscription for match & player updates
+  // Realtime subscription
   useEffect(() => {
-    const matchChannel = supabase
+    const channel = supabase
       .channel(`match-${id}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'matches', filter: `id=eq.${id}` }, () => {
         queryClient.invalidateQueries({ queryKey: ['match', id] });
@@ -112,8 +125,7 @@ const MatchDetail = () => {
         queryClient.invalidateQueries({ queryKey: ['match-players', id] });
       })
       .subscribe();
-
-    return () => { supabase.removeChannel(matchChannel); };
+    return () => { supabase.removeChannel(channel); };
   }, [id, queryClient]);
 
   // Determine lock state
@@ -123,23 +135,6 @@ const MatchDetail = () => {
     const lockTime = match.lock_time || match.match_date;
     return new Date(lockTime).getTime() <= Date.now();
   }, [match]);
-
-  // Sync players for this match
-  const syncPlayersMutation = useMutation({
-    mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke('sync-players', {
-        body: { match_id: id },
-      });
-      if (error) throw error;
-      if (!data.success) throw new Error(data.error || 'Sync failed');
-      return data;
-    },
-    onSuccess: (data) => {
-      toast.success(`Synced ${data.players} players! 🏏`);
-      queryClient.invalidateQueries({ queryKey: ['match-players', id] });
-    },
-    onError: (error: any) => toast.error(`Player sync failed: ${error.message}`),
-  });
 
   // Save team mutation
   const saveMutation = useMutation({
@@ -243,38 +238,30 @@ const MatchDetail = () => {
   return (
     <Layout>
       <div className="space-y-4 pt-4">
-        <div className="flex items-center justify-between">
-          <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors">
-            <ArrowLeft className="w-4 h-4" /> Back
-          </button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => syncPlayersMutation.mutate()}
-            disabled={syncPlayersMutation.isPending}
-            className="border-border text-foreground hover:bg-muted text-xs"
-          >
-            <RefreshCw className={cn("w-3 h-3 mr-1", syncPlayersMutation.isPending && "animate-spin")} />
-            {syncPlayersMutation.isPending ? 'Syncing...' : 'Sync Players'}
-          </Button>
-        </div>
+        <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors">
+          <ArrowLeft className="w-4 h-4" /> Back
+        </button>
 
         {/* Match Header */}
-        <div className="gradient-card rounded-xl border border-border p-4 text-center">
-          <p className="text-xs text-muted-foreground mb-1">{match.venue}</p>
-          <div className="flex items-center justify-center gap-4">
-            <span className="font-display font-bold text-foreground">{match.team_a_logo}</span>
-            {match.status !== 'upcoming' && match.team_a_score && (
-              <span className="text-xs text-muted-foreground">{match.team_a_score}</span>
-            )}
-            <span className="text-xs text-muted-foreground">vs</span>
-            {match.status !== 'upcoming' && match.team_b_score && (
-              <span className="text-xs text-muted-foreground">{match.team_b_score}</span>
-            )}
-            <span className="font-display font-bold text-foreground">{match.team_b_logo}</span>
-          </div>
-          <div className="mt-2">
-            <CountdownTimer targetDate={match.lock_time || match.match_date} isLocked={isLocked} />
+        <div className="gradient-card rounded-xl border border-border p-4">
+          <p className="text-xs text-muted-foreground mb-3 text-center">{match.venue}</p>
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col items-center gap-1 flex-1">
+              <TeamLogo team={match.team_a} size="lg" />
+              <span className="font-display font-bold text-foreground text-sm">{match.team_a_logo}</span>
+              {match.team_a_score && <span className="text-xs text-muted-foreground">{match.team_a_score}</span>}
+            </div>
+            <div className="flex flex-col items-center px-3">
+              <span className="text-xs text-muted-foreground font-display">vs</span>
+              <div className="mt-1">
+                <CountdownTimer targetDate={match.lock_time || match.match_date} isLocked={isLocked} />
+              </div>
+            </div>
+            <div className="flex flex-col items-center gap-1 flex-1">
+              <TeamLogo team={match.team_b} size="lg" />
+              <span className="font-display font-bold text-foreground text-sm">{match.team_b_logo}</span>
+              {match.team_b_score && <span className="text-xs text-muted-foreground">{match.team_b_score}</span>}
+            </div>
           </div>
         </div>
 
@@ -322,21 +309,15 @@ const MatchDetail = () => {
         </div>
 
         {/* Player List */}
-        {playersLoading ? (
-          <p className="text-center text-muted-foreground text-sm py-8">Loading players...</p>
-        ) : allPlayers.length === 0 ? (
-          <div className="text-center py-8">
-            <p className="text-muted-foreground text-sm mb-3">No players found for this match.</p>
-            <Button
-              size="sm"
-              onClick={() => syncPlayersMutation.mutate()}
-              disabled={syncPlayersMutation.isPending}
-              className="gradient-primary text-primary-foreground font-display"
-            >
-              <RefreshCw className={cn("w-3 h-3 mr-1", syncPlayersMutation.isPending && "animate-spin")} />
-              Sync Players from API
-            </Button>
+        {playersLoading || (allPlayers.length === 0 && !autoSyncDone.current) ? (
+          <div className="flex flex-col items-center gap-2 py-8">
+            <Loader2 className="w-6 h-6 text-primary animate-spin" />
+            <p className="text-muted-foreground text-sm">Loading players...</p>
           </div>
+        ) : allPlayers.length === 0 ? (
+          <p className="text-center text-muted-foreground text-sm py-8">
+            No players available yet. They'll appear automatically once squads are announced.
+          </p>
         ) : (
           <div className="space-y-2">
             {filteredPlayers.map(player => (

@@ -19,6 +19,23 @@ const TEAM_ABBRS: Record<string, string> = {
   "Rawalpindi Pindiz": "RP",
 };
 
+async function apiFetch(supabase: any, url: string, retries = 3): Promise<any> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      // Try direct fetch first
+      const resp = await fetch(url);
+      if (resp.ok) return resp.json();
+    } catch (_) {}
+    try {
+      // Fallback to DB http extension
+      const { data, error } = await supabase.rpc("http_get_json", { target_url: url });
+      if (!error && data) return data;
+    } catch (_) {}
+    if (i < retries - 1) await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+  }
+  throw new Error(`Failed to fetch after ${retries} retries: ${url.split('?')[0]}`);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -32,10 +49,9 @@ Deno.serve(async (req) => {
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Fetch all matches across pages, filter for PSL
     const allPslMatches: any[] = [];
     for (let offset = 0; offset <= 75; offset += 25) {
-      const data = await fetchViaDb<any>(
+      const data = await apiFetch(
         supabase,
         `${CRICAPI_BASE}/matches?apikey=${encodeURIComponent(CRICAPI_KEY)}&offset=${offset}`
       );
@@ -47,10 +63,9 @@ Deno.serve(async (req) => {
       if (data.data.length < 25) break;
     }
 
-    // Also get currentMatches for live scores
     let currentMap = new Map<string, any>();
     try {
-      const curr = await fetchViaDb<any>(
+      const curr = await apiFetch(
         supabase,
         `${CRICAPI_BASE}/currentMatches?apikey=${encodeURIComponent(CRICAPI_KEY)}&offset=0`
       );
@@ -63,7 +78,6 @@ Deno.serve(async (req) => {
       }
     } catch (_) {}
 
-    // Merge: prefer currentMatches data (has live scores)
     const seenIds = new Set<string>();
     const merged: any[] = [];
     for (const [id, m] of currentMap) {
@@ -77,7 +91,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Get existing matches by external_id
     const { data: existingMatches } = await supabase
       .from("matches")
       .select("id, external_id")
@@ -88,7 +101,6 @@ Deno.serve(async (req) => {
       if (em.external_id) existingMap.set(em.external_id, em.id);
     }
 
-    // Process in batches
     const toInsert: any[] = [];
     const toUpdate: { id: string; data: any }[] = [];
 
@@ -124,7 +136,7 @@ Deno.serve(async (req) => {
         team_a_logo: teamALogo, team_b_logo: teamBLogo,
         match_date: matchDate, venue: match.venue || "TBD",
         status, team_a_score: teamAScore, team_b_score: teamBScore,
-        lock_time: matchDate, // lock at match start
+        lock_time: matchDate,
       };
 
       if (existingMap.has(externalId)) {
@@ -134,13 +146,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Batch insert
     if (toInsert.length > 0) {
       const { error } = await supabase.from("matches").insert(toInsert);
       if (error) console.error("Batch insert error:", error.message);
     }
 
-    // Batch updates (Supabase doesn't support batch update, do individually but quickly)
     for (const u of toUpdate) {
       await supabase.from("matches").update(u.data).eq("id", u.id);
     }
@@ -162,12 +172,6 @@ Deno.serve(async (req) => {
     });
   }
 });
-
-async function fetchViaDb<T>(supabase: ReturnType<typeof createClient>, url: string): Promise<T> {
-  const { data, error } = await supabase.rpc("http_get_json", { target_url: url });
-  if (error) throw new Error(`Database HTTP fetch failed: ${error.message}`);
-  return data as T;
-}
 
 function parseTeamFromName(name: string, index: number): string {
   if (!name) return "TBD";

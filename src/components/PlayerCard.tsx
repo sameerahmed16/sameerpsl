@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge';
-import { Check, X, Minus, Star } from 'lucide-react';
+import { Star } from 'lucide-react';
 import { PlayingXIBadge } from '@/components/PlayingXIBadge';
+import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 
 type PlayerRole = 'BAT' | 'BOWL' | 'AR' | 'WK';
@@ -44,6 +45,7 @@ export const PlayerCard = ({
   showPoints = false,
 }: PlayerCardProps) => {
   const notInXI = selected && player.is_playing === false;
+  const initials = player.name.split(' ').map(n => n[0]).join('').slice(0, 2);
 
   return (
     <div
@@ -59,18 +61,14 @@ export const PlayerCard = ({
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
-          {player.image_url ? (
-            <img
-              src={player.image_url}
-              alt={player.name}
-              className="w-10 h-10 rounded-full object-cover border border-border shrink-0"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-            />
-          ) : (
-            <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center font-display font-bold text-sm text-foreground shrink-0">
-              {player.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
-            </div>
-          )}
+          <Avatar className="w-10 h-10 shrink-0 border border-border">
+            {player.image_url && (
+              <AvatarImage src={player.image_url} alt={player.name} className="object-cover" />
+            )}
+            <AvatarFallback className="bg-muted font-display font-bold text-sm text-foreground">
+              {initials}
+            </AvatarFallback>
+          </Avatar>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
               <p className="font-display font-semibold text-sm text-foreground truncate">{player.name}</p>
