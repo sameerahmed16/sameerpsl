@@ -48,7 +48,7 @@ export const MatchCard = ({ match }: { match: MatchData }) => {
         <div className="flex items-center justify-between">
           <div className="flex flex-col items-center gap-2 flex-1">
             <TeamLogo team={match.team_a} size="md" />
-            <span className="text-xs text-muted-foreground text-center max-w-[80px] leading-tight font-display font-bold">{match.team_a_logo}</span>
+            <span className="text-xs text-muted-foreground text-center max-w-[80px] leading-tight font-display font-bold">{getTeamFullName(match.team_a)}</span>
           </div>
           
           <div className="flex flex-col items-center gap-1 px-2">
@@ -71,7 +71,7 @@ export const MatchCard = ({ match }: { match: MatchData }) => {
 
           <div className="flex flex-col items-center gap-2 flex-1">
             <TeamLogo team={match.team_b} size="md" />
-            <span className="text-xs text-muted-foreground text-center max-w-[80px] leading-tight font-display font-bold">{match.team_b_logo}</span>
+            <span className="text-xs text-muted-foreground text-center max-w-[80px] leading-tight font-display font-bold">{getTeamFullName(match.team_b)}</span>
           </div>
         </div>
 
