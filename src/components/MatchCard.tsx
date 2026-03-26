@@ -22,14 +22,16 @@ const statusStyles: Record<string, string> = {
   completed: 'bg-muted text-muted-foreground opacity-70',
 };
 
-const TeamLogo = ({ abbr, teamName }: { abbr: string; teamName: string }) => (
-  <div className="flex flex-col items-center gap-2">
-    <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center font-display font-bold text-lg text-foreground border border-border">
-      {abbr}
+function TeamLogo({ abbr, teamName }: { abbr: string; teamName: string }) {
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center font-display font-bold text-lg text-foreground border border-border">
+        {abbr}
+      </div>
+      <span className="text-xs text-muted-foreground text-center max-w-[80px] leading-tight">{teamName}</span>
     </div>
-    <span className="text-xs text-muted-foreground text-center max-w-[80px] leading-tight">{teamName}</span>
-  </div>
-);
+  );
+}
 
 export const MatchCard = ({ match }: { match: MatchData }) => {
   const matchDate = new Date(match.match_date);

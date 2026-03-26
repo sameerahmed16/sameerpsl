@@ -313,7 +313,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      http_get_json: { Args: { target_url: string }; Returns: Json }
     }
     Enums: {
       player_role: "BAT" | "BOWL" | "AR" | "WK"
