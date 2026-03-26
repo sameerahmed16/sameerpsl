@@ -108,6 +108,7 @@ export type Database = {
           created_at: string
           external_id: string | null
           id: string
+          lock_time: string | null
           match_date: string
           status: string
           team_a: string
@@ -123,6 +124,7 @@ export type Database = {
           created_at?: string
           external_id?: string | null
           id?: string
+          lock_time?: string | null
           match_date: string
           status?: string
           team_a: string
@@ -138,6 +140,7 @@ export type Database = {
           created_at?: string
           external_id?: string | null
           id?: string
+          lock_time?: string | null
           match_date?: string
           status?: string
           team_a?: string
