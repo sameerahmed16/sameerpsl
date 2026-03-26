@@ -2,7 +2,7 @@ import { Badge } from '@/components/ui/badge';
 import { Calendar, MapPin, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
-import { TeamLogo } from '@/components/TeamLogo';
+import { TeamLogo, getTeamFullName } from '@/components/TeamLogo';
 import { cn } from '@/lib/utils';
 
 interface MatchData {

@@ -4,14 +4,16 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Layout } from '@/components/Layout';
 import { PlayerCard } from '@/components/PlayerCard';
 import { CountdownTimer } from '@/components/CountdownTimer';
-import { TeamLogo } from '@/components/TeamLogo';
+import { TeamLogo, getTeamFullName } from '@/components/TeamLogo';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Filter, AlertTriangle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Filter, AlertTriangle, Loader2, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { getFallbackPlayers, type FallbackPlayer } from '@/data/pslSquads';
+import { v5 as uuidv5 } from 'uuid';
 
 type PlayerRole = 'BAT' | 'BOWL' | 'AR' | 'WK';
 
@@ -43,17 +45,48 @@ const ROLE_COLORS: Record<PlayerRole, string> = {
   WK: 'bg-destructive text-destructive-foreground',
 };
 
+// Generate a deterministic UUID from a string (for fallback players)
+const NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+const generateId = (name: string, team: string): string => {
+  try {
+    return uuidv5(`${name}-${team}`, NAMESPACE);
+  } catch {
+    // Simple hash fallback
+    let hash = 0;
+    const str = `${name}-${team}`;
+    for (let i = 0; i < str.length; i++) {
+      const chr = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + chr;
+      hash |= 0;
+    }
+    return `fallback-${Math.abs(hash).toString(16).padStart(8, '0')}`;
+  }
+};
+
+const fallbackToPlayer = (fp: FallbackPlayer): Player => ({
+  id: generateId(fp.name, fp.team),
+  name: fp.name,
+  team: fp.team,
+  role: fp.role,
+  credits: fp.credits,
+  points: 0,
+  is_playing: null,
+  image_url: null,
+});
+
 const MatchDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const autoSyncDone = useRef(false);
+  const syncAttempted = useRef(false);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [captain, setCaptain] = useState<string | null>(null);
   const [viceCaptain, setViceCaptain] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<PlayerRole | 'ALL'>('ALL');
+  const [usingFallback, setUsingFallback] = useState(false);
+  const [syncDone, setSyncDone] = useState(false);
 
   // Fetch match data
   const { data: match } = useQuery({
@@ -67,7 +100,7 @@ const MatchDetail = () => {
   });
 
   // Fetch players for this match
-  const { data: allPlayers = [], isLoading: playersLoading } = useQuery({
+  const { data: dbPlayers = [], isLoading: playersLoading } = useQuery({
     queryKey: ['match-players', id],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -79,45 +112,43 @@ const MatchDetail = () => {
     },
   });
 
-  // Auto-sync players if none found — try edge function first, then proxy fallback
+  // Try background sync once, but don't block UI
   useEffect(() => {
-    if (!playersLoading && allPlayers.length === 0 && !autoSyncDone.current && match?.external_id) {
-      autoSyncDone.current = true;
+    if (!playersLoading && dbPlayers.length === 0 && !syncAttempted.current && match?.external_id) {
+      syncAttempted.current = true;
       
-      const syncPlayers = async () => {
-        // Try direct sync first
-        await supabase.functions.invoke('sync-players', { body: { match_id: id } });
-        queryClient.invalidateQueries({ queryKey: ['match-players', id] });
-        
-        // Check if players appeared after a delay
-        await new Promise(r => setTimeout(r, 3000));
-        const { data: check } = await supabase
-          .from('match_players')
-          .select('id')
-          .eq('match_id', id!)
-          .limit(1);
-        
-        if (!check?.length) {
-          // Fallback: fetch via proxy and post to sync-players
-          try {
-            const { data: squadData } = await supabase.functions.invoke('proxy-cricapi', {
-              body: { endpoint: 'match_squad', params: { id: match.external_id } }
-            });
-            if (squadData?.status === 'success' && squadData?.data) {
-              await supabase.functions.invoke('sync-players', {
-                body: { match_id: id, squad_data: squadData.data }
-              });
-              queryClient.invalidateQueries({ queryKey: ['match-players', id] });
-            }
-          } catch (e) {
-            console.error('Proxy fallback failed:', e);
-          }
+      const trySync = async () => {
+        try {
+          await supabase.functions.invoke('sync-players', { body: { match_id: id } });
+          await new Promise(r => setTimeout(r, 2000));
+          queryClient.invalidateQueries({ queryKey: ['match-players', id] });
+        } catch (e) {
+          console.warn('Background sync failed:', e);
+        } finally {
+          setSyncDone(true);
         }
       };
-      
-      syncPlayers();
+      trySync();
+    } else if (!playersLoading) {
+      setSyncDone(true);
     }
-  }, [playersLoading, allPlayers.length, id, queryClient, match?.external_id]);
+  }, [playersLoading, dbPlayers.length, id, queryClient, match?.external_id]);
+
+  // Determine final player list: DB players or fallback
+  const allPlayers = useMemo(() => {
+    if (dbPlayers.length > 0) {
+      setUsingFallback(false);
+      return dbPlayers;
+    }
+    if (!match) return [];
+    // Use fallback data
+    const fallbacks = getFallbackPlayers(match.team_a, match.team_b);
+    if (fallbacks.length > 0) {
+      setUsingFallback(true);
+      return fallbacks.map(fallbackToPlayer);
+    }
+    return [];
+  }, [dbPlayers, match]);
 
   // Fetch existing user team
   const { data: existingTeam } = useQuery({
@@ -171,6 +202,26 @@ const MatchDetail = () => {
     mutationFn: async () => {
       if (!user || !id || !captain || !viceCaptain) throw new Error('Missing data');
       if (isLocked) throw new Error('Team is locked');
+
+      // If using fallback players, insert them into DB first
+      if (usingFallback) {
+        const playersToInsert = allPlayers.filter(p => selected.has(p.id));
+        for (const p of playersToInsert) {
+          await supabase.from('players').upsert({
+            id: p.id,
+            name: p.name,
+            team: p.team,
+            role: p.role,
+            credits: p.credits,
+            points: 0,
+          }, { onConflict: 'id' });
+          
+          await supabase.from('match_players').upsert({
+            match_id: id,
+            player_id: p.id,
+          }, { onConflict: 'match_id,player_id' }).select();
+        }
+      }
 
       const { data: team, error: teamError } = await supabase
         .from('user_teams')
@@ -265,6 +316,10 @@ const MatchDetail = () => {
   const isValid = selected.size === 11 && captain && viceCaptain &&
     Object.entries(ROLE_CONSTRAINTS).every(([role, [min]]) => roleCounts[role as PlayerRole] >= min);
 
+  const teamAName = getTeamFullName(match.team_a);
+  const teamBName = getTeamFullName(match.team_b);
+  const isStillLoading = playersLoading || (!syncDone && dbPlayers.length === 0);
+
   return (
     <Layout>
       <div className="space-y-4 pt-4">
@@ -278,7 +333,7 @@ const MatchDetail = () => {
           <div className="flex items-center justify-between">
             <div className="flex flex-col items-center gap-1 flex-1">
               <TeamLogo team={match.team_a} size="lg" />
-              <span className="font-display font-bold text-foreground text-sm">{match.team_a_logo}</span>
+              <span className="font-display font-bold text-foreground text-sm text-center">{teamAName}</span>
               {match.team_a_score && <span className="text-xs text-muted-foreground">{match.team_a_score}</span>}
             </div>
             <div className="flex flex-col items-center px-3">
@@ -289,11 +344,19 @@ const MatchDetail = () => {
             </div>
             <div className="flex flex-col items-center gap-1 flex-1">
               <TeamLogo team={match.team_b} size="lg" />
-              <span className="font-display font-bold text-foreground text-sm">{match.team_b_logo}</span>
+              <span className="font-display font-bold text-foreground text-sm text-center">{teamBName}</span>
               {match.team_b_score && <span className="text-xs text-muted-foreground">{match.team_b_score}</span>}
             </div>
           </div>
         </div>
+
+        {/* Fallback notice */}
+        {usingFallback && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border text-muted-foreground text-xs">
+            <WifiOff className="w-4 h-4 shrink-0" />
+            <span>Using estimated squads. Live data will update automatically when available.</span>
+          </div>
+        )}
 
         {/* Warnings */}
         {notPlayingCount > 0 && !isLocked && (
@@ -339,15 +402,18 @@ const MatchDetail = () => {
         </div>
 
         {/* Player List */}
-        {playersLoading || (allPlayers.length === 0 && !autoSyncDone.current) ? (
+        {isStillLoading ? (
           <div className="flex flex-col items-center gap-2 py-8">
             <Loader2 className="w-6 h-6 text-primary animate-spin" />
             <p className="text-muted-foreground text-sm">Loading players...</p>
           </div>
         ) : allPlayers.length === 0 ? (
-          <p className="text-center text-muted-foreground text-sm py-8">
-            No players available yet. They'll appear automatically once squads are announced.
-          </p>
+          <div className="flex flex-col items-center gap-3 py-8 text-center">
+            <WifiOff className="w-8 h-8 text-muted-foreground" />
+            <p className="text-muted-foreground text-sm">
+              No players available yet. They'll appear once squads are announced.
+            </p>
+          </div>
         ) : (
           <div className="space-y-2">
             {filteredPlayers.map(player => (
