@@ -117,7 +117,6 @@ const MatchDetail = () => {
       const trySync = async () => {
         try {
           await supabase.functions.invoke('sync-players', { body: { match_id: id } });
-          await new Promise(r => setTimeout(r, 2000));
           queryClient.invalidateQueries({ queryKey: ['match-players', id] });
         } catch (e) {
           console.warn('Background sync failed:', e);
@@ -312,7 +311,7 @@ const MatchDetail = () => {
 
   const teamAName = getTeamFullName(match.team_a);
   const teamBName = getTeamFullName(match.team_b);
-  const isStillLoading = playersLoading || (!syncDone && dbPlayers.length === 0);
+  const isStillLoading = playersLoading;
 
   return (
     <Layout>
