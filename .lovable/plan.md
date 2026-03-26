@@ -1,62 +1,43 @@
 
 
-## Plan: Auto-Sync, Real Players, Team Logos, Player Images & Team Builder
+## Plan: Fix Signup for All Users + Deduplicate Profiles + Unique Username Constraint
 
-### Problems Identified
-1. **Sync button visible to users** — data should auto-sync via scheduled cron jobs, not manual clicks
-2. **No players showing** — the match detail page shows "No players found" because player sync hasn't run or players aren't linked
-3. **No team logos** — just text abbreviations (LQ, IU, etc.) instead of real images
-4. **No player images** — player cards show initials instead of photos from CricAPI
-5. **`matches` table missing `lock_time` column** — the column doesn't exist in the DB schema despite being referenced in code
+### Problems
+1. **Google login uses `lovable.auth`** which only works within Lovable's environment — external users on the published site can't use it
+2. **Duplicate profiles** exist for the same username ("sameerahmed" appears 3 times, "sameer" once)
+3. **No unique constraint on username** — anyone can pick an already-taken username
 
 ### Changes
 
-#### 1. Set Up Automated Cron Sync (Database)
-- Enable `pg_cron` and `pg_net` extensions
-- Create three cron jobs:
-  - **Every 6 hours**: call `sync-matches` to refresh schedule
-  - **Every 6 hours**: call `sync-players` to refresh squads
-  - **Every 30 seconds** (during live matches): call `sync-live-scores`
-- This replaces the manual Sync button entirely
+#### 1. Remove Duplicate Profiles (Data cleanup)
+- Delete the 3 duplicate profile rows (keep only the one tied to `user_id: 1a5fc270-eac9-42bc-89e3-1cb677b5b06a` which is the active session)
+- Use the insert tool (DELETE statement) to remove rows with `user_id` in `(d05428eb-..., 44c07cad-..., 5f6cdbdf-...)`
 
-#### 2. Add `lock_time` Column to `matches`
-- Migration: `ALTER TABLE matches ADD COLUMN IF NOT EXISTS lock_time timestamptz;`
-- Default to `match_date` value
+#### 2. Add Unique Constraint on Username (Migration)
+- `ALTER TABLE profiles ADD CONSTRAINT profiles_username_unique UNIQUE (username);`
+- This prevents duplicate usernames at the database level
 
-#### 3. Remove Sync Buttons from UI
-- **Index.tsx**: Remove the Sync button from the hero section and the empty-state sync button. Keep only the auto-refreshing query + realtime subscription. On first load, if no matches exist, trigger sync automatically once (silently in background).
-- **MatchDetail.tsx**: Remove "Sync Players" button. Auto-fetch players on mount if empty (silent background call).
+#### 3. Add Username Availability Check on Signup (Auth.tsx)
+- Before calling `supabase.auth.signUp`, query `profiles` table to check if the username is already taken
+- Show an error toast if username exists
+- Add a debounced check that shows inline feedback as the user types
 
-#### 4. Add Real PSL Team Logos
-- Store team logo URLs in a constant map using publicly available PSL team logo URLs (Wikipedia/official sources) or use high-quality SVG/PNG placeholders with team colors
-- Create a `TeamLogo` component that renders the actual team logo image with fallback to abbreviation
-- Update `MatchCard.tsx` and `MatchDetail.tsx` to use real logos
+#### 4. Fix Google Login for External Users (Auth.tsx)
+- The `lovable.auth.signInWithOAuth('google')` only works inside the Lovable preview environment
+- Replace with standard `supabase.auth.signInWithOAuth({ provider: 'google' })` which works for everyone on the published URL
+- This requires Google OAuth to be configured in the backend (it already is via Lovable Cloud)
 
-#### 5. Fix Player Images Display
-- The `sync-players` edge function already fetches `playerImg` from CricAPI — verify it's storing correctly
-- Update `PlayerCard.tsx` to properly render `image_url` with better fallback handling
-- Ensure the `sync-players` function runs on first visit to a match (auto-trigger if no players found)
+#### 5. Enable Auto-Confirm for Email Signups
+- Currently users must verify email before signing in, which can be a barrier
+- Use `configure_auth` to enable auto-confirm so users can sign in immediately after signup
+- **Note:** Will only do this if available; otherwise keep the current verify-email flow and make sure the messaging is clear
 
-#### 6. Auto-Sync on First Load
-- In `Index.tsx`: if matches query returns empty, automatically invoke `sync-matches` + `sync-players` in background (no button needed)
-- In `MatchDetail.tsx`: if players list is empty, automatically invoke `sync-players` with the match_id
-
-#### 7. Enhance Match Detail Team Building UX
-- Ensure the team builder (player selection, captain/VC, save) works end-to-end
-- Add a `unique(user_id, match_id)` constraint on `user_teams` if not present (needed for upsert)
-- Make sure the "Build Team" flow is prominent when entering a match
-
-### Files to Create/Edit
-- **New migration**: `lock_time` column + cron jobs + unique constraint
-- **`src/pages/Index.tsx`**: Remove sync buttons, add auto-sync on empty
-- **`src/pages/MatchDetail.tsx`**: Remove sync button, auto-sync players, use team logos
-- **`src/components/MatchCard.tsx`**: Add real team logo images
-- **`src/components/TeamLogo.tsx`** (new): Reusable team logo component with image URLs
-- **`supabase/functions/sync-players/index.ts`**: Ensure player images are fetched properly
+### Files to Edit
+- **`src/pages/Auth.tsx`** — Replace `lovable.auth` Google login with `supabase.auth.signInWithOAuth`, add username uniqueness check
+- **Migration** — Add unique constraint on `profiles.username`
+- **Data cleanup** — Delete duplicate profile rows
 
 ### Technical Details
-- Team logos will use a hardcoded map of team name → logo URL (using reliable CDN/Wikipedia sources)
-- Cron jobs use `pg_cron` + `pg_net` to call edge functions on schedule
-- Auto-sync uses `useEffect` with a one-time trigger when data is empty
-- The `refetchInterval: 30000` on match queries already handles UI refresh
+- The `handle_new_user` trigger auto-creates a profile on signup using the username from `raw_user_meta_data`. The unique constraint will cause signup to fail gracefully if username is taken, but we add a pre-check for better UX.
+- Google OAuth via `supabase.auth.signInWithOAuth` redirects to Google and back to the app's URL — works on any domain, not just Lovable preview.
 
