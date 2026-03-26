@@ -1,67 +1,79 @@
 
 
-## Plan: Multi-Source Live Score Fallback Chain
+## Audit: Discrepancies and Mismatches Found
 
-### Current State
-- CricAPI is the sole data source, often blocked by network resets in Edge Functions
-- `http_get_json` RPC is the only fallback, also unreliable
-- If both fail, no scores update at all
+After reviewing the database schema, constraints, RLS policies, edge functions, and frontend code, here are the issues discovered:
 
-### What We'll Build
+### Critical Issues
 
-A priority-based fallback chain in `sync-live-scores`: **CricAPI → Cricbuzz scraping → ESPN scraping → manual entry admin panel**
+**1. No Triggers Exist — Profile Auto-Creation is Broken**
+The `handle_new_user()` function exists but no trigger is attached to `auth.users`. New signups will NOT create a profile row, causing the leaderboard and username display to fail silently.
 
-#### 1. Cricbuzz Scraping Fallback (Edge Function)
-When CricAPI fails, scrape Cricbuzz's live scorecard page for the match. Cricbuzz URLs follow a predictable pattern (`/live-cricket-scores/{match_id}`).
+**Fix**: Create the trigger via migration: `CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION handle_new_user();`
 
-- Store `cricbuzz_match_id` on the `matches` table (new column via migration)
-- Parse the HTML for: team scores, individual batting/bowling stats, match status
-- Extract player names and stats, map to DB players by fuzzy name matching
-- Compute fantasy points from scraped stats using the same scoring functions
+**2. Admin Page Cannot Update Matches (RLS Blocks It)**
+The `matches` table has NO `UPDATE` policy for authenticated users. When the admin saves scores via `AdminScores.tsx`, the `.update()` call silently fails due to RLS. The admin page uses the anon key (client-side), not the service role key, so it has no special privileges.
 
-#### 2. ESPN Scraping Fallback
-If Cricbuzz also fails, try ESPN Cricinfo's JSON API (they expose match data at predictable endpoints like `https://www.espncricinfo.com/matches/engine/match/{id}.json`).
+**Fix**: Either add an RLS policy allowing admin updates (via a `user_roles` table check), or move the admin save logic into an edge function that uses the service role key.
 
-- Store `espn_match_id` on the `matches` table
-- ESPN's JSON endpoint returns structured scorecard data — easier to parse than HTML
+**3. `players.points` Gets Overwritten Per Match**
+In `sync-live-scores` line 431: `await supabase.from("players").update({ points, is_playing: true }).eq("id", dbPlayer.id)`. This overwrites the global `players.points` with the **latest match's** points. If a player scores 50 pts in Match 1 then 10 pts in Match 2, their displayed points become 10. The `match_player_points` table correctly isolates per-match, but `players.points` is wrong.
 
-#### 3. Admin Manual Score Entry
-As the last resort, add an admin page where you can manually enter:
-- Match scores (team runs/wickets/overs)
-- Individual player batting/bowling stats
-- Match status (live/completed)
+**Fix**: Either remove the `players.points` update entirely (derive from `match_player_points` sum), or compute it as `SUM(points)` across all matches.
 
-This writes directly to `match_player_points` and `matches` tables.
+**4. Playing XI Never Updates**
+`updatePlayingXI()` (line 593) checks `player.external_id` and skips if null. All 11 players in the DB have `external_id = null`. So the Playing XI status will never be set.
 
-#### 4. Fallback Orchestration in Edge Function
-Update `sync-live-scores` with a waterfall:
-```text
-trySource("cricapi")  → success? done
-trySource("cricbuzz") → success? done  
-trySource("espn")     → success? done
-log("All sources failed, awaiting manual entry")
-```
+**Fix**: The `seed-players` function needs to be run to populate `external_id` values. Alternatively, match Playing XI by name instead of `external_id`.
 
-Each source returns a normalized `MatchScoreData` object with the same shape, so downstream point calculation is source-agnostic.
+### Moderate Issues
 
-### Database Migration
-- Add `cricbuzz_match_id` and `espn_match_id` columns to `matches`
-- Add `data_source` column to `match_player_points` (track where points came from)
+**5. Fallback ID Mismatch on Live Match View**
+When a team is saved, player IDs are remapped from fallback `generateId()` UUIDs to real DB UUIDs. But when loading an existing team during a live match, if `dbPlayers` is empty (API down), `allPlayers` uses fallback IDs from `generateId()`. The `selectedPlayers` filter (`allPlayers.filter(p => selected.has(p.id))`) compares fallback IDs against real DB IDs from `existingTeam.team_players` — they won't match. Result: **"My Team" tab shows 0 players during live matches if the player list API is down.**
 
-### Files Summary
+**Fix**: Always fetch players from DB for live matches (they were upserted during team save), or maintain a reverse ID map.
+
+**6. Duplicate Unique Indexes**
+- `match_players` has two identical unique indexes: `match_players_match_id_player_id_key` AND `match_players_match_player_unique`
+- `user_teams` has two identical unique indexes: `user_teams_user_id_match_id_key` AND `user_teams_user_match_unique`
+
+These waste storage and slow writes. **Fix**: Drop the duplicates.
+
+**7. `players.external_id` Has a UNIQUE Constraint but All Values Are NULL**
+Multiple null values are allowed (Postgres treats nulls as distinct), so this isn't broken yet. But once `seed-players` runs, if any two players share an `external_id` it will fail. This is fine as long as CricAPI IDs are truly unique.
+
+### Minor Issues
+
+**8. Admin Security is Client-Side Only**
+`ADMIN_EMAILS` array is checked in the React component. Any user can call the Supabase API directly to update `match_player_points` (which has a public INSERT/UPDATE policy). The admin page is security theater without server-side enforcement.
+
+**9. Unused Variable in AdminScores**
+Line 128: `const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;` is assigned but never used.
+
+**10. Console Warning: Ref on Function Component**
+`PlayingXIBadge` and `Badge` components receive refs but aren't wrapped in `forwardRef`. Harmless but noisy.
+
+### Summary of Required Fixes
+
+| Priority | Issue | Fix |
+|----------|-------|-----|
+| Critical | No `auth.users` trigger for profiles | Create trigger in migration |
+| Critical | Admin can't update matches (RLS) | Add edge function for admin ops |
+| Critical | `players.points` overwritten each match | Compute as SUM from `match_player_points` |
+| Critical | Playing XI never updates (null external_id) | Run seed-players or match by name |
+| Moderate | Fallback ID mismatch on live view | Always load players from DB for saved teams |
+| Moderate | Duplicate unique indexes | Drop duplicates |
+| Minor | Client-side admin security | Move to edge function with role check |
+| Minor | Unused variable, console warnings | Clean up |
+
+### Files to Change
 
 | Action | File |
 |--------|------|
-| Edit | `supabase/functions/sync-live-scores/index.ts` — add Cricbuzz + ESPN scrapers, fallback chain |
-| Migration | Add `cricbuzz_match_id`, `espn_match_id` to `matches`; `data_source` to `match_player_points` |
-| Create | `src/pages/AdminScores.tsx` — manual score entry page |
-| Edit | `src/App.tsx` — add admin route |
-
-### Technical Details
-
-- **Cricbuzz scraping**: Direct `fetch()` of the match page HTML, parse with regex/string matching for score blocks. No Firecrawl needed — Cricbuzz pages are static HTML.
-- **ESPN JSON**: Their match pages expose a `.json` endpoint with full scorecard data including player IDs and stats.
-- **Name matching**: Normalize player names (lowercase, remove diacritics) and match against DB players by team + fuzzy name. Handle common variations (e.g., "Babar Azam" vs "M Babar Azam").
-- **Admin auth**: Only allow manual entry for users with admin role (check `user_roles` table). If no admin role system exists yet, use a simple email whitelist.
-- **Data source tracking**: `match_player_points.data_source` = 'cricapi' | 'cricbuzz' | 'espn' | 'manual' for debugging which source was used.
+| Migration | Create `handle_new_user` trigger, drop duplicate indexes |
+| Create | `supabase/functions/admin-update-scores/index.ts` — server-side admin logic |
+| Edit | `supabase/functions/sync-live-scores/index.ts` — fix `players.points` to use SUM, match Playing XI by name |
+| Edit | `src/pages/MatchDetail.tsx` — fix fallback ID mismatch for live view |
+| Edit | `src/pages/AdminScores.tsx` — call edge function instead of direct DB update |
+| Edit | `src/components/PlayingXIBadge.tsx` — add forwardRef |
 
