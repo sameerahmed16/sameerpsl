@@ -13,7 +13,7 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFallbackPlayers, type FallbackPlayer } from '@/data/pslSquads';
-import { v5 as uuidv5 } from 'uuid';
+
 
 type PlayerRole = 'BAT' | 'BOWL' | 'AR' | 'WK';
 
@@ -45,22 +45,19 @@ const ROLE_COLORS: Record<PlayerRole, string> = {
   WK: 'bg-destructive text-destructive-foreground',
 };
 
-// Generate a deterministic UUID from a string (for fallback players)
-const NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+// Generate a deterministic UUID-like string from player name + team
 const generateId = (name: string, team: string): string => {
-  try {
-    return uuidv5(`${name}-${team}`, NAMESPACE);
-  } catch {
-    // Simple hash fallback
-    let hash = 0;
-    const str = `${name}-${team}`;
-    for (let i = 0; i < str.length; i++) {
-      const chr = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + chr;
-      hash |= 0;
-    }
-    return `fallback-${Math.abs(hash).toString(16).padStart(8, '0')}`;
+  const str = `${name}-${team}`;
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
   }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const hex = (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-4${hex.slice(13,16)}-a${hex.slice(16,19)}-${hex.slice(0,12)}`;
 };
 
 const fallbackToPlayer = (fp: FallbackPlayer): Player => ({
