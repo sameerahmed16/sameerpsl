@@ -1,14 +1,17 @@
+import { useState, useEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Layout } from '@/components/Layout';
 import { MatchCard } from '@/components/MatchCard';
-import { Flame, Calendar, CheckCircle, RefreshCw } from 'lucide-react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
-import { Button } from '@/components/ui/button';
-import { toast } from 'sonner';
-import { useEffect } from 'react';
+
+type MatchStatus = 'upcoming' | 'live' | 'completed';
 
 const Index = () => {
+  const [activeTab, setActiveTab] = useState<MatchStatus>('upcoming');
   const queryClient = useQueryClient();
+  const autoSyncTriggered = useRef(false);
 
   const { data: matches = [], isLoading } = useQuery({
     queryKey: ['matches'],
@@ -20,127 +23,76 @@ const Index = () => {
       if (error) throw error;
       return data;
     },
-    refetchInterval: 30000, // Auto-refresh every 30s
+    refetchInterval: 30000,
   });
 
-  // Realtime subscription for live match updates
+  // Auto-sync on first load if no matches
+  useEffect(() => {
+    if (!isLoading && matches.length === 0 && !autoSyncTriggered.current) {
+      autoSyncTriggered.current = true;
+      supabase.functions.invoke('sync-matches').then(() => {
+        queryClient.invalidateQueries({ queryKey: ['matches'] });
+        setTimeout(() => supabase.functions.invoke('sync-players'), 5000);
+      });
+    }
+  }, [isLoading, matches.length, queryClient]);
+
+  // Realtime subscription
   useEffect(() => {
     const channel = supabase
       .channel('matches-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'matches' },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ['matches'] });
-        }
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['matches'] });
+      })
       .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [queryClient]);
 
-  const syncMutation = useMutation({
-    mutationFn: async () => {
-      // Sync matches first
-      const { data: matchData, error: matchError } = await supabase.functions.invoke('sync-matches');
-      if (matchError) throw matchError;
-      if (!matchData.success) throw new Error(matchData.error || 'Match sync failed');
-
-      // Then sync players
-      const { data: playerData, error: playerError } = await supabase.functions.invoke('sync-players');
-      if (playerError) throw playerError;
-
-      return { ...matchData, players: playerData?.players || 0 };
-    },
-    onSuccess: (data) => {
-      toast.success(`Synced ${data.matches_synced} matches & ${data.players} players! 🏏`);
-      queryClient.invalidateQueries({ queryKey: ['matches'] });
-    },
-    onError: (error: any) => toast.error(`Sync failed: ${error.message}`),
-  });
-
-  const liveMatches = matches.filter(m => m.status === 'live');
-  const upcomingMatches = matches.filter(m => m.status === 'upcoming');
-  const completedMatches = matches.filter(m => m.status === 'completed');
+  const filteredMatches = matches.filter(m => m.status === activeTab);
+  const liveCt = matches.filter(m => m.status === 'live').length;
 
   return (
     <Layout>
       <div className="space-y-6 pt-4">
         <div className="gradient-hero rounded-xl p-6 border border-border">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="font-display font-black text-2xl text-foreground mb-1">
-                PSL <span className="text-gradient-gold">2026</span>
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                Build your fantasy team & compete with friends
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => syncMutation.mutate()}
-              disabled={syncMutation.isPending}
-              className="border-border text-foreground hover:bg-muted"
-            >
-              <RefreshCw className={`w-4 h-4 mr-1 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
-              {syncMutation.isPending ? 'Syncing...' : 'Sync'}
-            </Button>
-          </div>
+          <h1 className="font-display font-black text-2xl text-foreground mb-1">
+            PSL <span className="text-gradient-gold">2026</span>
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Build your fantasy team & compete with friends
+          </p>
         </div>
 
-        {isLoading ? (
-          <p className="text-center text-muted-foreground text-sm py-8">Loading matches...</p>
-        ) : matches.length === 0 ? (
-          <div className="text-center py-12">
-            <p className="text-muted-foreground text-sm mb-4">No matches found. Sync data from CricAPI to get started.</p>
-            <Button
-              onClick={() => syncMutation.mutate()}
-              disabled={syncMutation.isPending}
-              className="gradient-primary text-primary-foreground font-display"
-            >
-              <RefreshCw className={`w-4 h-4 mr-2 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
-              Sync PSL Matches
-            </Button>
-          </div>
-        ) : (
-          <>
-            {liveMatches.length > 0 && (
-              <section>
-                <h2 className="font-display font-bold text-lg text-foreground flex items-center gap-2 mb-3">
-                  <Flame className="w-5 h-5 text-destructive" /> Live
-                </h2>
-                <div className="space-y-3">
-                  {liveMatches.map(m => <MatchCard key={m.id} match={m} />)}
-                </div>
-              </section>
-            )}
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as MatchStatus)} className="w-full">
+          <TabsList className="grid w-full grid-cols-3 bg-muted">
+            <TabsTrigger value="upcoming" className="font-display text-xs data-[state=active]:gradient-primary data-[state=active]:text-primary-foreground">
+              Upcoming
+            </TabsTrigger>
+            <TabsTrigger value="live" className="font-display text-xs data-[state=active]:gradient-primary data-[state=active]:text-primary-foreground relative">
+              Live {liveCt > 0 && <span className="ml-1 w-2 h-2 rounded-full bg-destructive inline-block animate-pulse" />}
+            </TabsTrigger>
+            <TabsTrigger value="completed" className="font-display text-xs data-[state=active]:gradient-primary data-[state=active]:text-primary-foreground">
+              Completed
+            </TabsTrigger>
+          </TabsList>
 
-            {upcomingMatches.length > 0 && (
-              <section>
-                <h2 className="font-display font-bold text-lg text-foreground flex items-center gap-2 mb-3">
-                  <Calendar className="w-5 h-5 text-secondary" /> Upcoming
-                </h2>
-                <div className="space-y-3">
-                  {upcomingMatches.map(m => <MatchCard key={m.id} match={m} />)}
-                </div>
-              </section>
+          <TabsContent value={activeTab} className="mt-4 space-y-3">
+            {isLoading ? (
+              <div className="flex flex-col items-center gap-2 py-8">
+                <Loader2 className="w-6 h-6 text-primary animate-spin" />
+                <p className="text-muted-foreground text-sm">Loading matches...</p>
+              </div>
+            ) : filteredMatches.length === 0 ? (
+              <p className="text-center text-muted-foreground text-sm py-8">
+                No {activeTab} matches right now.
+              </p>
+            ) : (
+              filteredMatches.map(match => (
+                <MatchCard key={match.id} match={match} />
+              ))
             )}
-
-            {completedMatches.length > 0 && (
-              <section>
-                <h2 className="font-display font-bold text-lg text-foreground flex items-center gap-2 mb-3">
-                  <CheckCircle className="w-5 h-5 text-muted-foreground" /> Completed
-                </h2>
-                <div className="space-y-3">
-                  {completedMatches.map(m => <MatchCard key={m.id} match={m} />)}
-                </div>
-              </section>
-            )}
-          </>
-        )}
+          </TabsContent>
+        </Tabs>
       </div>
     </Layout>
   );
