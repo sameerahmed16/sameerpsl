@@ -8,6 +8,29 @@ const corsHeaders = {
 
 const CRICAPI_BASE = "https://api.cricapi.com/v1";
 
+async function fetchWithRetry(url: string, retries = 3, delayMs = 1000): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.ok) return res;
+      // If rate limited, wait longer
+      if (res.status === 429) {
+        await new Promise(r => setTimeout(r, delayMs * (i + 2)));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      console.error(`Fetch attempt ${i + 1} failed:`, err);
+      if (i === retries - 1) throw err;
+      await new Promise(r => setTimeout(r, delayMs * Math.pow(2, i)));
+    }
+  }
+  throw new Error("All retry attempts exhausted");
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -21,8 +44,8 @@ Deno.serve(async (req) => {
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Step 1: Fetch current matches from CricAPI
-    const matchesRes = await fetch(
+    // Step 1: Fetch current matches from CricAPI with retry
+    const matchesRes = await fetchWithRetry(
       `${CRICAPI_BASE}/currentMatches?apikey=${CRICAPI_KEY}&offset=0`
     );
     if (!matchesRes.ok) {
@@ -43,37 +66,45 @@ Deno.serve(async (req) => {
     );
 
     // Also try series endpoint
-    const seriesRes = await fetch(
-      `${CRICAPI_BASE}/series?apikey=${CRICAPI_KEY}&offset=0`
-    );
     let pslSeriesId: string | null = null;
-    if (seriesRes.ok) {
-      const seriesData = await seriesRes.json();
-      if (seriesData.status === "success") {
-        const pslSeries = (seriesData.data || []).find(
-          (s: any) =>
-            s.info?.toLowerCase().includes("psl") ||
-            s.info?.toLowerCase().includes("pakistan super league")
-        );
-        if (pslSeries) pslSeriesId = pslSeries.id;
+    try {
+      const seriesRes = await fetchWithRetry(
+        `${CRICAPI_BASE}/series?apikey=${CRICAPI_KEY}&offset=0`
+      );
+      if (seriesRes.ok) {
+        const seriesData = await seriesRes.json();
+        if (seriesData.status === "success") {
+          const pslSeries = (seriesData.data || []).find(
+            (s: any) =>
+              s.info?.toLowerCase().includes("psl") ||
+              s.info?.toLowerCase().includes("pakistan super league")
+          );
+          if (pslSeries) pslSeriesId = pslSeries.id;
+        }
       }
+    } catch (e) {
+      console.error("Series fetch failed, continuing with currentMatches only:", e);
     }
 
     // Fetch series matches if found
     let seriesMatches: any[] = [];
     if (pslSeriesId) {
-      const seriesInfoRes = await fetch(
-        `${CRICAPI_BASE}/series_info?apikey=${CRICAPI_KEY}&id=${pslSeriesId}`
-      );
-      if (seriesInfoRes.ok) {
-        const seriesInfoData = await seriesInfoRes.json();
-        if (seriesInfoData.status === "success") {
-          seriesMatches = seriesInfoData.data?.matchList || [];
+      try {
+        const seriesInfoRes = await fetchWithRetry(
+          `${CRICAPI_BASE}/series_info?apikey=${CRICAPI_KEY}&id=${pslSeriesId}`
+        );
+        if (seriesInfoRes.ok) {
+          const seriesInfoData = await seriesInfoRes.json();
+          if (seriesInfoData.status === "success") {
+            seriesMatches = seriesInfoData.data?.matchList || [];
+          }
         }
+      } catch (e) {
+        console.error("Series info fetch failed:", e);
       }
     }
 
-    // Combine and deduplicate by CricAPI id
+    // Combine and deduplicate
     const allMatches = [...pslMatches];
     for (const sm of seriesMatches) {
       if (sm.id && !allMatches.find((m: any) => m.id === sm.id)) {
@@ -117,7 +148,6 @@ Deno.serve(async (req) => {
 
       const matchDate = m.dateTimeGMT || m.date || new Date().toISOString();
 
-      // Check if match already exists by external_id
       const { data: existing } = await supabase
         .from("matches")
         .select("id")
@@ -127,37 +157,25 @@ Deno.serve(async (req) => {
       let matchDbId: string;
 
       if (existing) {
-        // Update existing match
         await supabase
           .from("matches")
           .update({
-            team_a: teamA,
-            team_b: teamB,
-            team_a_logo: teamALogo,
-            team_b_logo: teamBLogo,
-            match_date: matchDate,
-            venue: m.venue || "TBD",
-            status,
-            team_a_score: teamAScore,
-            team_b_score: teamBScore,
+            team_a: teamA, team_b: teamB,
+            team_a_logo: teamALogo, team_b_logo: teamBLogo,
+            match_date: matchDate, venue: m.venue || "TBD",
+            status, team_a_score: teamAScore, team_b_score: teamBScore,
           })
           .eq("id", existing.id);
         matchDbId = existing.id;
       } else {
-        // Insert new match
         const { data: newMatch, error } = await supabase
           .from("matches")
           .insert({
             external_id: externalId,
-            team_a: teamA,
-            team_b: teamB,
-            team_a_logo: teamALogo,
-            team_b_logo: teamBLogo,
-            match_date: matchDate,
-            venue: m.venue || "TBD",
-            status,
-            team_a_score: teamAScore,
-            team_b_score: teamBScore,
+            team_a: teamA, team_b: teamB,
+            team_a_logo: teamALogo, team_b_logo: teamBLogo,
+            match_date: matchDate, venue: m.venue || "TBD",
+            status, team_a_score: teamAScore, team_b_score: teamBScore,
           })
           .select()
           .single();
@@ -167,10 +185,11 @@ Deno.serve(async (req) => {
 
       matchesSynced++;
 
-      // Fetch squad for this match
+      // Fetch squad (non-critical, skip on failure)
       try {
-        const squadRes = await fetch(
-          `${CRICAPI_BASE}/match_squad?apikey=${CRICAPI_KEY}&id=${externalId}`
+        const squadRes = await fetchWithRetry(
+          `${CRICAPI_BASE}/match_squad?apikey=${CRICAPI_KEY}&id=${externalId}`,
+          2, 500
         );
         if (squadRes.ok) {
           const squadData = await squadRes.json();
@@ -180,55 +199,31 @@ Deno.serve(async (req) => {
               for (const p of teamSquad.players || []) {
                 const pExternalId = p.id;
                 if (!pExternalId) continue;
-
                 const role = mapRole(p.battingStyle, p.bowlingStyle, p.role);
-
-                // Check if player exists
                 const { data: existingPlayer } = await supabase
-                  .from("players")
-                  .select("id")
-                  .eq("external_id", pExternalId)
-                  .maybeSingle();
+                  .from("players").select("id").eq("external_id", pExternalId).maybeSingle();
 
                 let playerDbId: string;
-
                 if (existingPlayer) {
-                  await supabase
-                    .from("players")
-                    .update({
-                      name: p.name || "Unknown",
-                      team: teamName,
-                      role,
-                      image_url: p.playerImg || null,
-                      is_playing: p.playingXI === true ? true : p.playingXI === false ? false : null,
-                    })
-                    .eq("id", existingPlayer.id);
+                  await supabase.from("players").update({
+                    name: p.name || "Unknown", team: teamName, role,
+                    image_url: p.playerImg || null,
+                    is_playing: p.playingXI === true ? true : p.playingXI === false ? false : null,
+                  }).eq("id", existingPlayer.id);
                   playerDbId = existingPlayer.id;
                 } else {
                   const { data: newPlayer, error } = await supabase
-                    .from("players")
-                    .insert({
-                      external_id: pExternalId,
-                      name: p.name || "Unknown",
-                      team: teamName,
-                      role,
-                      credits: estimateCredits(p),
+                    .from("players").insert({
+                      external_id: pExternalId, name: p.name || "Unknown",
+                      team: teamName, role, credits: estimateCredits(p),
                       image_url: p.playerImg || null,
                       is_playing: p.playingXI === true ? true : p.playingXI === false ? false : null,
-                    })
-                    .select()
-                    .single();
+                    }).select().single();
                   if (error || !newPlayer) continue;
                   playerDbId = newPlayer.id;
                 }
-
-                // Link player to match (ignore conflicts)
-                await supabase
-                  .from("match_players")
-                  .upsert(
-                    { match_id: matchDbId, player_id: playerDbId },
-                    { onConflict: "match_id,player_id" }
-                  );
+                await supabase.from("match_players")
+                  .upsert({ match_id: matchDbId, player_id: playerDbId }, { onConflict: "match_id,player_id" });
               }
             }
           }
@@ -239,12 +234,7 @@ Deno.serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({
-        success: true,
-        matches_synced: matchesSynced,
-        psl_series_id: pslSeriesId,
-        total_api_matches: allMatches.length,
-      }),
+      JSON.stringify({ success: true, matches_synced: matchesSynced, psl_series_id: pslSeriesId }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: unknown) {
