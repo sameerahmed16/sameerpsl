@@ -25,7 +25,7 @@ export const Navbar = () => {
             <span className="text-gradient-gold ml-1">PSL</span>
           </Link>
           <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-display font-bold text-foreground">
-            U
+            {initial}
           </div>
         </div>
       </header>
