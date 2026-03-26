@@ -1,34 +1,35 @@
 
 
-## Plan: Fix Player Loading & Remove CricAPI Dependency
+## Plan: Update PSL 2026 Squads to Actual Rosters
 
-### Root Cause
-The `players` table has **0 rows**. CricAPI is permanently blocked from edge functions (connection reset). The current code waits for the sync attempt to finish before showing anything — that's why it's stuck on "Loading players."
+### Problem
+The `pslSquads.ts` file contains outdated/fictional player assignments from previous PSL seasons. Many players are on wrong teams or retired.
 
-The fallback data in `pslSquads.ts` already has correct squads for all 8 PSL teams. The fix is to **show fallback players immediately** without waiting for the doomed sync attempt.
+### Source
+Wisden's official PSL 2026 squad list (published March 25, 2026) provides the correct rosters for all 8 teams.
 
 ### Changes
 
-#### 1. Fix loading logic in `MatchDetail.tsx`
-- Change `isStillLoading` to only depend on `playersLoading` (the DB query), not on `syncDone`
-- Show fallback players instantly when DB returns empty — don't block on the background sync
-- Move the sync attempt to fire-and-forget (keep it, but never block UI on it)
-- Remove the 2-second artificial delay after sync
+**File: `src/data/pslSquads.ts`** — Replace all 8 team squads with the actual PSL 2026 rosters:
 
-#### 2. Update PSL squad data in `pslSquads.ts`
-- Cross-check and correct player names/roles for the actual PSL 2026 season rosters (the current data has some players on wrong teams or retired players)
-- Ensure team names match exactly what's in the `matches` table: "Quetta Gladiators", "Karachi Kings", "Lahore Qalandars", "Islamabad United", "Peshawar Zalmi", "Multan Sultans", "Hyderabad Kingsmen", "Rawalpindi Pindiz"
+| Team | Captain | Key Players |
+|------|---------|-------------|
+| **Rawalpindi Pindiz** | Mohammad Rizwan | Sam Billings, Naseem Shah, Daryl Mitchell, Kamran Ghulam |
+| **Peshawar Zalmi** | Babar Azam | James Vince, Kusal Mendis, Aaron Hardie, Iftikhar Ahmed, Shahnawaz Dahani |
+| **Quetta Gladiators** | Saud Shakeel | Rilee Rossouw, Alzarri Joseph, Tom Curran, Ben McDermott, Abrar Ahmed |
+| **Multan Sultans** | Ashton Turner | Steve Smith, Shan Masood, Mohammad Nawaz, Tabraiz Shamsi, Josh Philippe |
+| **Karachi Kings** | David Warner | Moeen Ali, Hasan Ali, Abbas Afridi, Adam Zampa, Azam Khan, Salman Ali Agha |
+| **Lahore Qalandars** | Shaheen Afridi | Fakhar Zaman, Abdullah Shafique, Haris Rauf, Mustafizur Rahman, Sikandar Raza, Usama Mir |
+| **Hyderabad Kingsmen** | Marnus Labuschagne | Saim Ayub, Glenn Maxwell, Kusal Perera, Maheesh Theekshana, Sharjeel Khan |
+| **Islamabad United** | Shadab Khan | Devon Conway, Imad Wasim, Faheem Ashraf, Haider Ali, Mohammad Hasnain |
 
-#### 3. Remove blocking sync from page load
-- Keep the background sync as opportunistic (in case CricAPI starts working), but never show a spinner waiting for it
-- If DB players exist, use them; if not, use fallback instantly
+### Role Assignment Logic
+- Known keepers (Rizwan, Billings, Azam Khan, Philippe, etc.) → WK
+- Known all-rounders (Shadab, Imad, Faheem, Moeen, etc.) → AR
+- Known bowlers (Shaheen, Naseem, Haris Rauf, etc.) → BOWL
+- Everyone else → BAT
+- Credits: 9-10.5 for star players, 7-8.5 for mid-tier, 6-7 for squad players
 
 ### Files to Edit
-- **`src/pages/MatchDetail.tsx`** — fix `isStillLoading` logic, remove sync blocking
-- **`src/data/pslSquads.ts`** — verify/correct squad data
-
-### Technical Details
-- The key line change: `const isStillLoading = playersLoading;` (remove `|| (!syncDone && dbPlayers.length === 0)`)
-- Fallback players are already wired up via `allPlayers` useMemo — they just need to not be hidden behind the loading spinner
-- No new APIs needed — Google doesn't have a public cricket API, and web scraping is unreliable. The hardcoded fallback is the most reliable approach for a fantasy league with known teams.
+- **`src/data/pslSquads.ts`** — full replacement of all squad arrays with correct 2026 rosters
 
