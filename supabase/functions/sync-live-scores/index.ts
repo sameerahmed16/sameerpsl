@@ -94,7 +94,7 @@ Deno.serve(async (req) => {
 
         // 1. Cricbuzz (free, no key, most reliable)
         if (!scorecard && match.cricbuzz_match_id) {
-          scorecard = await tryCricbuzz(match.cricbuzz_match_id, match);
+          scorecard = await tryCricbuzz(match.cricbuzz_match_id, match, supabase);
         }
 
         // 2. ESPN Cricinfo (free, no key)
