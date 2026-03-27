@@ -276,17 +276,27 @@ async function tryCricbuzz(
     // Primary: scrape scorecard page via DB http extension (bypasses edge function network issues)
     if (supabase) {
       try {
+        console.log(`Cricbuzz: fetching scorecard for ID ${cricbuzzId} via RPC`);
         const { data: html, error } = await supabase.rpc("http_get_text", {
           target_url: `https://www.cricbuzz.com/live-cricket-scorecard/${cricbuzzId}`
         });
-        if (!error && html) {
+        if (error) {
+          console.log(`Cricbuzz RPC error: ${error.message}`);
+        } else if (html) {
+          console.log(`Cricbuzz: got ${html.length} chars HTML, parsing...`);
           const result = parseCricbuzzRSC(html, match);
           if (result) {
-            console.log(`Cricbuzz RSC scorecard succeeded for match ${match.id}, ${result.players.length} players`);
+            console.log(`Cricbuzz RSC scorecard succeeded for match ${match.id}, ${result.players.length} players, scores: ${result.teamAScore} / ${result.teamBScore}`);
             return result;
+          } else {
+            console.log(`Cricbuzz: RSC parsing returned null`);
           }
+        } else {
+          console.log(`Cricbuzz: RPC returned no data and no error`);
         }
-      } catch (_) { /* fall through */ }
+      } catch (e) {
+        console.log(`Cricbuzz RPC exception: ${e}`);
+      }
     }
 
     // Fallback: direct fetch
