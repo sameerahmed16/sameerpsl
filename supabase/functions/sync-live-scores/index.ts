@@ -68,19 +68,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    // ── Auto-discover match IDs (Cricbuzz → ESPN → CricAPI) ──
-    const needsDiscovery = liveMatches.filter(m =>
-      !m.cricbuzz_match_id || !m.espn_match_id
-    );
+    // ── Auto-discover match IDs (Cricbuzz only — ESPN/CricAPI blocked from this environment) ──
+    const needsDiscovery = liveMatches.filter(m => !m.cricbuzz_match_id);
     if (needsDiscovery.length > 0) {
-      // Try Cricbuzz discovery
       await discoverCricbuzzIds(supabase, needsDiscovery);
-      // Try ESPN discovery
-      await discoverESPNIds(supabase, needsDiscovery);
-      // Try CricAPI discovery as last resort
-      if (CRICAPI_KEY) {
-        await discoverCricAPIIds(supabase, CRICAPI_KEY, needsDiscovery);
-      }
     }
 
     // ── Load alias map once ──
