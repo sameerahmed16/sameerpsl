@@ -388,6 +388,7 @@ export type Database = {
     }
     Functions: {
       http_get_json: { Args: { target_url: string }; Returns: Json }
+      http_get_text: { Args: { target_url: string }; Returns: string }
     }
     Enums: {
       player_role: "BAT" | "BOWL" | "AR" | "WK"

@@ -68,37 +68,18 @@ Deno.serve(async (req) => {
       );
     }
 
-    // ── Auto-discover real CricAPI match IDs ──
-    if (CRICAPI_KEY) {
-      const needsDiscovery = liveMatches.filter(m =>
-        !m.external_id || isUUID(m.external_id) || (!m.cricbuzz_match_id && !m.espn_match_id)
-      );
-      if (needsDiscovery.length > 0) {
-        try {
-          const apiData = await apiFetch(
-            `${CRICAPI_BASE}/currentMatches?apikey=${encodeURIComponent(CRICAPI_KEY)}&offset=0`,
-            supabase
-          );
-          if (apiData.status === "success" && apiData.data) {
-            for (const dbMatch of needsDiscovery) {
-              const found = apiData.data.find((cm: any) => {
-                if (!cm.id || !cm.name) return false;
-                const nameLower = cm.name.toLowerCase();
-                const teamANorm = dbMatch.team_a.toLowerCase();
-                const teamBNorm = dbMatch.team_b.toLowerCase();
-                return (nameLower.includes(teamANorm) || nameLower.includes(teamBNorm)) &&
-                       (nameLower.includes(teamANorm) && nameLower.includes(teamBNorm));
-              });
-              if (found) {
-                console.log(`Auto-discovered CricAPI ID ${found.id} for match ${dbMatch.id} (${dbMatch.team_a} vs ${dbMatch.team_b})`);
-                await supabase.from("matches").update({ external_id: found.id }).eq("id", dbMatch.id);
-                dbMatch.external_id = found.id;
-              }
-            }
-          }
-        } catch (err) {
-          console.log("Auto-discovery of match IDs failed:", err);
-        }
+    // ── Auto-discover match IDs (Cricbuzz → ESPN → CricAPI) ──
+    const needsDiscovery = liveMatches.filter(m =>
+      !m.cricbuzz_match_id || !m.espn_match_id
+    );
+    if (needsDiscovery.length > 0) {
+      // Try Cricbuzz discovery
+      await discoverCricbuzzIds(supabase, needsDiscovery);
+      // Try ESPN discovery
+      await discoverESPNIds(supabase, needsDiscovery);
+      // Try CricAPI discovery as last resort
+      if (CRICAPI_KEY) {
+        await discoverCricAPIIds(supabase, CRICAPI_KEY, needsDiscovery);
       }
     }
 
@@ -111,19 +92,19 @@ Deno.serve(async (req) => {
       try {
         let scorecard: NormalizedScorecard | null = null;
 
-        // 1. CricAPI
-        if (!scorecard && CRICAPI_KEY && match.external_id) {
-          scorecard = await tryCricAPI(CRICAPI_KEY, match.external_id, match, supabase);
-        }
-
-        // 2. Cricbuzz JSON
+        // 1. Cricbuzz (free, no key, most reliable)
         if (!scorecard && match.cricbuzz_match_id) {
-          scorecard = await tryCricbuzz(match.cricbuzz_match_id, match);
+          scorecard = await tryCricbuzz(match.cricbuzz_match_id, match, supabase);
         }
 
-        // 3. ESPN JSON
+        // 2. ESPN Cricinfo (free, no key)
         if (!scorecard && match.espn_match_id) {
           scorecard = await tryESPN(match.espn_match_id, match);
+        }
+
+        // 3. CricAPI (paid, currently has SSL issues)
+        if (!scorecard && CRICAPI_KEY && match.external_id) {
+          scorecard = await tryCricAPI(CRICAPI_KEY, match.external_id, match, supabase);
         }
 
         if (!scorecard) {
@@ -288,37 +269,175 @@ async function tryCricAPI(
 
 async function tryCricbuzz(
   cricbuzzId: string,
-  match: any
+  match: any,
+  supabase?: any
 ): Promise<NormalizedScorecard | null> {
   try {
-    // Try the commentary JSON endpoint first (structured data)
-    const commentaryUrl = `https://www.cricbuzz.com/match-api/${cricbuzzId}/commentary.json`;
-    let resp = await fetchWithTimeout(commentaryUrl, 10000, { "User-Agent": BROWSER_UA });
+    if (!supabase) return null;
     
-    if (resp.ok) {
-      try {
-        const data = await resp.json();
-        const result = parseCricbuzzCommentary(data, match);
-        if (result) {
-          console.log(`Cricbuzz commentary JSON succeeded for match ${match.id}`);
-          return result;
-        }
-      } catch (_) { /* fall through to scorecard */ }
+    // Use the mini-scorecard page which is much lighter than the full scorecard
+    console.log(`Cricbuzz: fetching mini score for ID ${cricbuzzId}`);
+    const { data: html, error } = await supabase.rpc("http_get_text", {
+      target_url: `https://www.cricbuzz.com/live-cricket-scores/${cricbuzzId}`
+    });
+    if (error) {
+      console.log(`Cricbuzz RPC error: ${error.message}`);
+      return null;
+    }
+    if (!html) {
+      console.log(`Cricbuzz: empty response`);
+      return null;
+    }
+    console.log(`Cricbuzz: got ${html.length} chars`);
+
+    // Extract scores from the page
+    let teamAScore: string | null = null;
+    let teamBScore: string | null = null;
+    const matchEnded = html.includes('"state":"Complete"') || html.includes(' won by ') || html.includes('"matchCompleted":true');
+    const players: PlayerStats[] = [];
+
+    // Look for score patterns in RSC data: "runs":N,"wickets":N,"overs":N
+    const scoreBlocks: string[] = [];
+    const scoreRegex = /"runs":(\d+),"wickets":(\d+),"overs":([\d.]+)/g;
+    let sm;
+    while ((sm = scoreRegex.exec(html)) !== null) {
+      scoreBlocks.push(`${sm[1]}/${sm[2]} (${sm[3]})`);
+    }
+    
+    if (scoreBlocks.length >= 1) teamAScore = scoreBlocks[0];
+    if (scoreBlocks.length >= 2) teamBScore = scoreBlocks[1];
+
+    // Fallback: simple score pattern
+    if (!teamAScore) {
+      const simpleRegex = /(\d{1,3})\/(\d{1,2})\s*\((\d{1,2}\.?\d?)\s*ov/g;
+      const simpleMatches = [...html.matchAll(simpleRegex)];
+      if (simpleMatches.length >= 1) teamAScore = `${simpleMatches[0][1]}/${simpleMatches[0][2]} (${simpleMatches[0][3]})`;
+      if (simpleMatches.length >= 2) teamBScore = `${simpleMatches[1][1]}/${simpleMatches[1][2]} (${simpleMatches[1][3]})`;
     }
 
-    // Fallback: try the scorecard API
-    const scorecardUrl = `https://www.cricbuzz.com/api/html/cricket-scorecard/${cricbuzzId}`;
-    resp = await fetchWithTimeout(scorecardUrl, 10000, { "User-Agent": BROWSER_UA });
-    if (!resp.ok) return null;
-
-    const html = await resp.text();
-    const result = parseCricbuzzHTML(html, match);
-    if (result) {
-      console.log(`Cricbuzz HTML fallback succeeded for match ${match.id}`);
+    if (!teamAScore && !teamBScore) {
+      console.log(`Cricbuzz: no scores found in page`);
+      return null;
     }
-    return result;
+
+    // Extract batsmen stats if available in RSC data
+    const batRegex = /"batName":"([^"]+)"[^}]*?"runs":(\d+)[^}]*?"balls":(\d+)[^}]*?"fours":(\d+)[^}]*?"sixes":(\d+)/g;
+    let bm;
+    while ((bm = batRegex.exec(html)) !== null) {
+      if (bm[1] && bm[1] !== "undefined") {
+        mergePlayer(players, {
+          name: bm[1],
+          runs: parseInt(bm[2]) || 0,
+          balls: parseInt(bm[3]) || 0,
+          fours: parseInt(bm[4]) || 0,
+          sixes: parseInt(bm[5]) || 0,
+        });
+      }
+    }
+
+    // Extract bowler stats
+    const bowlRegex = /"bowlName":"([^"]+)"[^}]*?"overs":([\d.]+)[^}]*?"maidens":(\d+)[^}]*?"runs":(\d+)[^}]*?"wickets":(\d+)/g;
+    let bwm;
+    while ((bwm = bowlRegex.exec(html)) !== null) {
+      if (bwm[1] && bwm[1] !== "undefined") {
+        mergePlayer(players, {
+          name: bwm[1],
+          oversBowled: parseFloat(bwm[2]) || 0,
+          maidens: parseInt(bwm[3]) || 0,
+          runsConceded: parseInt(bwm[4]) || 0,
+          wickets: parseInt(bwm[5]) || 0,
+        });
+      }
+    }
+
+    console.log(`Cricbuzz: scores ${teamAScore} / ${teamBScore}, ${players.length} players, ended=${matchEnded}`);
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz" };
   } catch (err) {
     console.log(`Cricbuzz failed for match ${match.id}:`, err);
+    return null;
+  }
+}
+
+// Parse Cricbuzz Next.js RSC payload embedded in the scorecard HTML page
+function parseCricbuzzRSC(html: string, match: any): NormalizedScorecard | null {
+  try {
+    const players: PlayerStats[] = [];
+    let teamAScore: string | null = null;
+    let teamBScore: string | null = null;
+    let matchEnded = false;
+
+    // Check match status
+    if (html.includes('"state":"Complete"') || html.includes('won by') || html.includes('"matchEnded":true')) {
+      matchEnded = true;
+    }
+
+    // Extract score info from RSC: look for "runs":N,"wickets":N,"overs":N patterns near team names
+    // Extract innings scores: pattern like "scoreTitle":"Team Innings","runs":150,"wickets":5,"overs":18.2
+    const scoreRegex = /"(?:scoreTitle|inningsId)"[^}]*?"runs":(\d+)[^}]*?"wickets":(\d+)[^}]*?"overs":([\d.]+)/g;
+    let scoreMatch;
+    let inningsIdx = 0;
+    while ((scoreMatch = scoreRegex.exec(html)) !== null) {
+      const score = `${scoreMatch[1]}/${scoreMatch[2]} (${scoreMatch[3]})`;
+      if (inningsIdx % 2 === 0) {
+        teamAScore = teamAScore ? `${teamAScore} & ${score}` : score;
+      } else {
+        teamBScore = teamBScore ? `${teamBScore} & ${score}` : score;
+      }
+      inningsIdx++;
+    }
+
+    // If no structured scores found, try simple regex on the full HTML
+    if (!teamAScore && !teamBScore) {
+      const simpleScoreRegex = /(\d{1,3})\/(\d{1,2})\s*\((\d{1,2}\.?\d?)\)/g;
+      const simpleMatches = [...html.matchAll(simpleScoreRegex)];
+      if (simpleMatches.length >= 1) {
+        teamAScore = `${simpleMatches[0][1]}/${simpleMatches[0][2]} (${simpleMatches[0][3]})`;
+      }
+      if (simpleMatches.length >= 2) {
+        teamBScore = `${simpleMatches[1][1]}/${simpleMatches[1][2]} (${simpleMatches[1][3]})`;
+      }
+    }
+
+    if (!teamAScore && !teamBScore) return null;
+
+    // Extract batsmen from RSC: "batName":"Player Name","runs":X,"balls":Y,"fours":Z,"sixes":W
+    const batRegex = /"batName":"([^"]+)"[^}]*?"runs":(\d+)[^}]*?"balls":(\d+)[^}]*?"(?:dots":\d+[^}]*?")?"fours":(\d+)[^}]*?"sixes":(\d+)/g;
+    let batMatch;
+    while ((batMatch = batRegex.exec(html)) !== null) {
+      const name = batMatch[1];
+      if (!name || name === "undefined") continue;
+      // Check if out: look for outDesc near this player
+      const outDescRegex = new RegExp(`"batName":"${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^}]*?"outDesc":"([^"]*)"`, 'g');
+      const outMatch = outDescRegex.exec(html);
+      const isOut = outMatch ? !outMatch[1].includes("not out") && outMatch[1] !== "" : undefined;
+      
+      mergePlayer(players, {
+        name,
+        runs: parseInt(batMatch[2]) || 0,
+        balls: parseInt(batMatch[3]) || 0,
+        fours: parseInt(batMatch[4]) || 0,
+        sixes: parseInt(batMatch[5]) || 0,
+        out: isOut,
+      });
+    }
+
+    // Extract bowlers: "bowlName":"Player Name","overs":X,"maidens":Y,"runs":Z,"wickets":W
+    const bowlRegex = /"bowlName":"([^"]+)"[^}]*?"overs":([\d.]+)[^}]*?"maidens":(\d+)[^}]*?"runs":(\d+)[^}]*?"wickets":(\d+)/g;
+    let bowlMatch;
+    while ((bowlMatch = bowlRegex.exec(html)) !== null) {
+      const name = bowlMatch[1];
+      if (!name || name === "undefined") continue;
+      mergePlayer(players, {
+        name,
+        oversBowled: parseFloat(bowlMatch[2]) || 0,
+        maidens: parseInt(bowlMatch[3]) || 0,
+        runsConceded: parseInt(bowlMatch[4]) || 0,
+        wickets: parseInt(bowlMatch[5]) || 0,
+      });
+    }
+
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz" };
+  } catch (_) {
     return null;
   }
 }
@@ -772,6 +891,156 @@ async function updatePlayingXI(
     }
   } catch (err) {
     console.error("Error updating Playing XI:", err);
+  }
+}
+
+// ─── Auto-Discovery Functions ───────────────────────────────────────────────
+
+const PSL_TEAM_KEYWORDS: Record<string, string[]> = {
+  "Quetta": ["quetta", "gladiators"],
+  "Karachi": ["karachi", "kings"],
+  "Lahore": ["lahore", "qalandars"],
+  "Islamabad": ["islamabad", "united"],
+  "Peshawar": ["peshawar", "zalmi"],
+  "Multan": ["multan", "sultans"],
+  "Rawalpindi": ["rawalpindi", "raiders"],
+};
+
+function teamMatchesKeywords(teamName: string, target: string): boolean {
+  const targetLower = target.toLowerCase();
+  // Direct substring match
+  if (targetLower.includes(teamName.toLowerCase())) return true;
+  // Check PSL keywords
+  for (const [key, keywords] of Object.entries(PSL_TEAM_KEYWORDS)) {
+    if (teamName.toLowerCase().includes(key.toLowerCase())) {
+      return keywords.some(kw => targetLower.includes(kw));
+    }
+  }
+  return false;
+}
+
+async function discoverCricbuzzIds(supabase: any, matches: any[]) {
+  const needsCricbuzz = matches.filter(m => !m.cricbuzz_match_id);
+  if (!needsCricbuzz.length) return;
+
+  try {
+    // Scrape the Cricbuzz live-scores HTML page via DB http extension (proven to work)
+    const { data: html, error } = await supabase.rpc("http_get_text", {
+      target_url: "https://www.cricbuzz.com/live-cricket-scores"
+    });
+    if (error || !html) {
+      console.log("Cricbuzz discovery failed:", error?.message);
+      return;
+    }
+
+    // Extract match links: /live-cricket-scores/{id}/{slug}
+    const linkRegex = /href="\/live-cricket-scores\/(\d+)\/([^"]+)"/g;
+    const cbMatches: { id: string; slug: string }[] = [];
+    let linkMatch;
+    while ((linkMatch = linkRegex.exec(html)) !== null) {
+      cbMatches.push({ id: linkMatch[1], slug: linkMatch[2] });
+    }
+
+    for (const dbMatch of needsCricbuzz) {
+      const teamALower = dbMatch.team_a.toLowerCase();
+      const teamBLower = dbMatch.team_b.toLowerCase();
+      
+      const found = cbMatches.find(cb => {
+        const slug = cb.slug.toLowerCase().replace(/-/g, ' ');
+        // Check PSL team abbreviations and names in the slug
+        const matchesA = teamMatchesKeywords(dbMatch.team_a, slug);
+        const matchesB = teamMatchesKeywords(dbMatch.team_b, slug);
+        return matchesA && matchesB;
+      });
+
+      if (found) {
+        console.log(`Cricbuzz: discovered ID ${found.id} (${found.slug}) for ${dbMatch.team_a} vs ${dbMatch.team_b}`);
+        await supabase.from("matches").update({ cricbuzz_match_id: found.id }).eq("id", dbMatch.id);
+        dbMatch.cricbuzz_match_id = found.id;
+      }
+    }
+  } catch (err) {
+    console.log("Cricbuzz discovery failed:", err);
+  }
+}
+
+async function discoverESPNIds(supabase: any, matches: any[]) {
+  const needsESPN = matches.filter(m => !m.espn_match_id);
+  if (!needsESPN.length) return;
+
+  try {
+    const url = "https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en";
+    let data: any;
+
+    try {
+      const resp = await fetchWithTimeout(url, 10000, {
+        "User-Agent": BROWSER_UA,
+        "Accept": "application/json"
+      });
+      if (resp.ok) {
+        data = await resp.json();
+      }
+    } catch (_) {
+      console.log("ESPN discovery direct fetch failed, trying RPC");
+    }
+
+    if (!data) {
+      const { data: rpcData, error } = await supabase.rpc("http_get_json", { target_url: url });
+      if (error || !rpcData) {
+        console.log("ESPN discovery via RPC also failed:", error?.message);
+        return;
+      }
+      data = rpcData;
+    }
+
+    const espnMatches = data.matches || data.content?.matches || [];
+    for (const dbMatch of needsESPN) {
+      const found = espnMatches.find((em: any) => {
+        const match = em.match || em;
+        const teams = match.teams || [];
+        const team1 = teams[0]?.team?.longName || teams[0]?.team?.name || teams[0]?.team?.abbreviation || "";
+        const team2 = teams[1]?.team?.longName || teams[1]?.team?.name || teams[1]?.team?.abbreviation || "";
+        return (teamMatchesKeywords(dbMatch.team_a, team1) && teamMatchesKeywords(dbMatch.team_b, team2)) ||
+               (teamMatchesKeywords(dbMatch.team_a, team2) && teamMatchesKeywords(dbMatch.team_b, team1));
+      });
+      if (found) {
+        const espnId = String((found.match || found).objectId || (found.match || found).id || (found.match || found).slug);
+        console.log(`ESPN: discovered ID ${espnId} for ${dbMatch.team_a} vs ${dbMatch.team_b}`);
+        await supabase.from("matches").update({ espn_match_id: espnId }).eq("id", dbMatch.id);
+        dbMatch.espn_match_id = espnId;
+      }
+    }
+  } catch (err) {
+    console.log("ESPN discovery failed:", err);
+  }
+}
+
+async function discoverCricAPIIds(supabase: any, apiKey: string, matches: any[]) {
+  const needsCricAPI = matches.filter(m => !m.external_id || isUUID(m.external_id));
+  if (!needsCricAPI.length) return;
+
+  try {
+    const apiData = await apiFetch(
+      `${CRICAPI_BASE}/currentMatches?apikey=${encodeURIComponent(apiKey)}&offset=0`,
+      supabase
+    );
+    if (apiData.status !== "success" || !apiData.data) return;
+
+    for (const dbMatch of needsCricAPI) {
+      const found = apiData.data.find((cm: any) => {
+        if (!cm.id || !cm.name) return false;
+        const nameLower = cm.name.toLowerCase();
+        return nameLower.includes(dbMatch.team_a.toLowerCase()) &&
+               nameLower.includes(dbMatch.team_b.toLowerCase());
+      });
+      if (found) {
+        console.log(`CricAPI: discovered ID ${found.id} for ${dbMatch.team_a} vs ${dbMatch.team_b}`);
+        await supabase.from("matches").update({ external_id: found.id }).eq("id", dbMatch.id);
+        dbMatch.external_id = found.id;
+      }
+    }
+  } catch (err) {
+    console.log("CricAPI discovery failed:", err);
   }
 }
 
