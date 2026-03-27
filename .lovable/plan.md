@@ -1,84 +1,37 @@
 
 
-## Plan: Auto Status Transition, Player Alias Table & Scraping Reliability
+## Plan: Fix Team Save Confirmation & Live Score Updates
 
-### 1. Auto Upcoming → Live Status Transition
+### Problem 1: No visible confirmation after saving team
+The save shows a brief toast notification, but once it disappears there's no persistent indicator that the team is already saved. Users can't tell if their team was saved.
 
-**Problem**: Matches stay "upcoming" until manually changed, so `sync-live-scores` never picks them up.
+**Fix**: On the upcoming match team selection view, when `existingTeam` exists, show a persistent "Team Saved ✓" banner above the save button. Change the save button text to "Update Team" when editing an existing team.
 
-**Fix**: At the top of `sync-live-scores/index.ts`, before querying for live matches, run an UPDATE to auto-transition matches whose `match_date` has passed:
-
-```sql
-UPDATE matches SET status = 'live'
-WHERE status = 'upcoming' AND match_date <= now()
-```
-
-Then query for `status IN ('live')` as before. This means the cron job (already running every minute) will automatically start tracking matches when their scheduled time arrives.
-
-**File**: `supabase/functions/sync-live-scores/index.ts` — add ~3 lines before the live matches query (line 50)
+**File**: `src/pages/MatchDetail.tsx`
+- Add a green confirmation banner when `existingTeam` is truthy and match is upcoming
+- Change save button label from "Save Team" to "Update Team" when editing
 
 ---
 
-### 2. Player Alias Mapping Table
+### Problem 2: Live scores not updating — no valid external IDs
+The live match (Quetta Gladiators vs Karachi Kings) has `external_id = '81ea634d-...'` which is a self-generated UUID, not a real CricAPI match ID. Both `cricbuzz_match_id` and `espn_match_id` are NULL. The sync function tries to fetch from CricAPI using this fake ID, gets "Failed to fetch after 3 attempts", and gives up.
 
-**Problem**: Scorecard names vary across sources (e.g., "M Rizwan" vs "Mohammad Rizwan" vs "Muhammad Rizwan"). Current fuzzy matching with `normalizeName` misses these.
+**Fix**: Add an auto-discovery step at the top of `sync-live-scores` that:
+1. For any live match missing valid CricAPI/Cricbuzz/ESPN IDs, queries the CricAPI `currentMatches` endpoint
+2. Fuzzy-matches by team names to find the real CricAPI match ID
+3. Updates the match record with the real `external_id` (and optionally `cricbuzz_match_id`)
+4. Then proceeds with the normal score fetch
 
-**Fix**:
-- **New migration**: Create `player_aliases` table:
-  ```sql
-  CREATE TABLE player_aliases (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    player_id uuid NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-    alias text NOT NULL,
-    UNIQUE(alias)
-  );
-  ALTER TABLE player_aliases ENABLE ROW LEVEL SECURITY;
-  CREATE POLICY "Aliases viewable by everyone" ON player_aliases FOR SELECT USING (true);
-  CREATE POLICY "Service role manages aliases" ON player_aliases FOR ALL TO service_role USING (true);
-  ```
-- **Seed common aliases**: Insert known variations for PSL players (e.g., "M Rizwan" → Mohammad Rizwan's player_id, "Shaheen" → Shaheen Shah Afridi's player_id)
-- **Update `computePlayerPoints`** in `sync-live-scores/index.ts`: After failing to match by normalized name, check the `player_aliases` table as a fallback lookup
+This is a ~30-line addition to `sync-live-scores/index.ts`, inserted right after the auto-transition block and before the live matches query.
 
-**Files**:
-| Action | File |
-|--------|------|
-| Migration | New `player_aliases` table |
-| Edit | `supabase/functions/sync-live-scores/index.ts` — load aliases, use in player matching |
+**File**: `supabase/functions/sync-live-scores/index.ts`
 
 ---
 
-### 3. Improve Cricbuzz Scraping Reliability
-
-**Problem**: The current Cricbuzz scraper uses fragile regex on HTML that may not match the actual page structure. The ESPN endpoint (`/matches/engine/match/{id}.json`) is deprecated.
-
-**Fix for Cricbuzz**:
-- Switch from the HTML scorecard URL to the **Cricbuzz JSON API** endpoint: `https://www.cricbuzz.com/api/html/cricket-scorecard/{id}` returns structured data that's more parseable
-- Use a more robust approach: fetch the **mini-scorecard JSON** from `https://www.cricbuzz.com/match-api/{id}/commentary.json` which returns structured innings data
-- Add proper User-Agent header to avoid blocks
-- Parse the JSON structure instead of regex on HTML
-
-**Fix for ESPN**:
-- Update to the current ESPN Cricinfo API format: `https://hs-consumer-api.espncricinfo.com/v1/pages/match/details?lang=en&seriesId={seriesId}&matchId={matchId}`
-- Or use the simpler summary endpoint: `https://hs-consumer-api.espncricinfo.com/v1/pages/match/scoreboard?lang=en&matchId={matchId}`
-- These return well-structured JSON with innings, batting, bowling arrays
-
-**Files**:
-| Action | File |
-|--------|------|
-| Edit | `supabase/functions/sync-live-scores/index.ts` — rewrite `tryCricbuzz()` and `tryESPN()` functions |
-
----
-
-### Summary of All Changes
+### Summary
 
 | Action | File | What |
 |--------|------|------|
-| Edit | `supabase/functions/sync-live-scores/index.ts` | Auto-transition upcoming→live; load aliases for matching; rewrite Cricbuzz/ESPN scrapers |
-| Migration | `player_aliases` table | New table for name alias lookups |
-| Data insert | Seed ~30-40 common PSL player aliases | Known name variations |
-
-### Technical Notes
-- The auto-transition runs inside the existing cron job — no new cron needed
-- Aliases are checked only when the primary normalized-name match fails, so no performance impact for already-matched players
-- Cricbuzz and ESPN rewrites maintain the same `NormalizedScorecard` return type, so downstream code (points calc, leaderboard) is unchanged
+| Edit | `src/pages/MatchDetail.tsx` | Add persistent "Team Saved" banner + "Update Team" button label |
+| Edit | `supabase/functions/sync-live-scores/index.ts` | Auto-discover real CricAPI match IDs for live matches |
 
