@@ -479,8 +479,11 @@ const MatchDetail = () => {
             </div>
           )}
           {match.status === 'completed' && (
-            <div className="flex justify-center mb-2">
-              <Badge className="bg-muted text-muted-foreground text-xs">Match Completed</Badge>
+            <div className="flex flex-col items-center gap-1 mb-2">
+              <Badge className="bg-primary/20 text-primary border-primary/30 text-xs font-bold">🏆 Final Score</Badge>
+              {match.winning_team && (
+                <p className="text-sm font-display font-bold text-primary">{match.winning_team} won!</p>
+              )}
             </div>
           )}
           <p className="text-xs text-muted-foreground mb-3 text-center">{match.venue}</p>

@@ -59,7 +59,7 @@ const Leaderboard = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('matches')
-        .select('id, team_a, team_b, status, match_date')
+        .select('id, team_a, team_b, status, match_date, winning_team')
         .in('status', ['upcoming', 'live', 'completed'])
         .order('match_date', { ascending: true })
         .limit(50);
