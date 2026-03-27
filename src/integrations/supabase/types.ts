@@ -199,6 +199,32 @@ export type Database = {
         }
         Relationships: []
       }
+      player_aliases: {
+        Row: {
+          alias: string
+          id: string
+          player_id: string
+        }
+        Insert: {
+          alias: string
+          id?: string
+          player_id: string
+        }
+        Update: {
+          alias?: string
+          id?: string
+          player_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "player_aliases_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       players: {
         Row: {
           created_at: string
