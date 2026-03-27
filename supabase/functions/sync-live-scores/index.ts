@@ -265,12 +265,8 @@ async function tryCricbuzz(
     const { data: html, error } = await supabase.rpc("http_get_text", {
       target_url: `https://www.cricbuzz.com/live-cricket-scores/${cricbuzzId}`
     });
-    if (error) {
-      console.log(`Cricbuzz RPC error: ${error.message}`);
-      return null;
-    }
-    if (!html) {
-      console.log(`Cricbuzz: empty response`);
+    if (error || !html) {
+      console.log(`Cricbuzz RPC error: ${error?.message}`);
       return null;
     }
     console.log(`Cricbuzz: got ${html.length} chars`);
@@ -279,42 +275,30 @@ async function tryCricbuzz(
     let teamBScore: string | null = null;
     const players: PlayerStats[] = [];
 
-    // Check match state more precisely — look for the match-specific state field
-    // Use the matchScoreDetails state, not random "won by" text in ads/videos
+    // Check match state
     const stateMatch = html.match(/\\?"state\\?":\s*\\?"(Complete|In Progress|Toss|Preview)\\?"/);
     const matchEnded = stateMatch ? stateMatch[1] === "Complete" : false;
 
     // Extract innings scores from inningsScoreList in RSC data
-    // Pattern: \"inningsId\":1,\"batTeamId\":332,\"batTeamName\":\"KRK\",\"score\":89,\"wickets\":3,\"overs\":9.3
-    // The data repeats - collect unique innings by inningsId
     const inningsRegex = /\\?"inningsId\\?":\s*(\d+)\s*,\s*\\?"batTeamId\\?":\s*\d+\s*,\s*\\?"batTeamName\\?":\s*\\?"([^"\\]+)\\?"\s*,\s*\\?"score\\?":\s*(\d+)\s*,\s*\\?"wickets\\?":\s*(\d+)\s*,\s*\\?"overs\\?":\s*([\d.]+)/g;
     const inningsByid = new Map<string, { team: string; score: string }>();
     let im;
     while ((im = inningsRegex.exec(html)) !== null) {
-      const inningsId = im[1];
-      const team = im[2];
-      const score = `${im[3]}/${im[4]} (${im[5]})`;
-      // Always update with latest data (page may have multiple RSC chunks)
-      inningsByid.set(inningsId, { team, score });
+      inningsByid.set(im[1], { team: im[2], score: `${im[3]}/${im[4]} (${im[5]})` });
     }
 
-    // Map innings to team A/B
     const innings = [...inningsByid.values()];
     if (innings.length >= 1) teamAScore = innings[0].score;
     if (innings.length >= 2) teamBScore = innings[1].score;
 
-    // Fallback: extract from title/meta: "KRK 88/3 (9.2)"
+    // Fallback score extraction from title
     if (!teamAScore) {
       const titleRegex = /(\w+)\s+(\d+)\/(\d+)\s*\(([\d.]+)\)/g;
       let tm;
       while ((tm = titleRegex.exec(html)) !== null) {
         const score = `${tm[2]}/${tm[3]} (${tm[4]})`;
-        if (!teamAScore) {
-          teamAScore = score;
-        } else if (!teamBScore && score !== teamAScore) {
-          teamBScore = score;
-          break;
-        }
+        if (!teamAScore) { teamAScore = score; }
+        else if (!teamBScore && score !== teamAScore) { teamBScore = score; break; }
       }
     }
 
@@ -323,51 +307,52 @@ async function tryCricbuzz(
       return null;
     }
 
-    // Extract current batsmen from miniscore RSC data:
-    // "batsmanStriker":{"id":1739,"name":"David Warner","runs":34,"balls":20,"fours":4,"sixes":1
-    // Both escaped and unescaped formats
-    const batRegex = /\\?"(?:batsmanStriker|batsmanNonStriker)\\?":\s*\{[^}]*?\\?"name\\?":\s*\\?"([^"\\]+)\\?"[^}]*?\\?"runs\\?":\s*(\d+)[^}]*?\\?"balls\\?":\s*(\d+)[^}]*?\\?"fours\\?":\s*(\d+)[^}]*?\\?"sixes\\?":\s*(\d+)/g;
-    let bm;
-    while ((bm = batRegex.exec(html)) !== null) {
-      if (bm[1] && bm[1] !== "undefined") {
-        mergePlayer(players, {
-          name: bm[1],
-          runs: parseInt(bm[2]) || 0,
-          balls: parseInt(bm[3]) || 0,
-          fours: parseInt(bm[4]) || 0,
-          sixes: parseInt(bm[5]) || 0,
-        });
+    // ─── Fetch SCORECARD page for full player data ───
+    let scorecardPlayers: PlayerStats[] = [];
+    try {
+      console.log(`Cricbuzz: fetching scorecard page for ID ${cricbuzzId}`);
+      const { data: scHtml, error: scError } = await supabase.rpc("http_get_text", {
+        target_url: `https://www.cricbuzz.com/live-cricket-scorecard/${cricbuzzId}`
+      });
+      if (!scError && scHtml && scHtml.length > 1000) {
+        console.log(`Cricbuzz: scorecard page got ${scHtml.length} chars`);
+        scorecardPlayers = parseScorecardPlayers(scHtml);
+        console.log(`Cricbuzz: scorecard parsed ${scorecardPlayers.length} players`);
       }
+    } catch (scErr) {
+      console.log(`Cricbuzz: scorecard fetch failed, using miniscore only:`, scErr);
     }
 
-    // Extract current bowlers from miniscore RSC data:
-    // "bowlerStriker":{"id":19074,"name":"Ahmed Daniyal","overs":2,...
-    const bowlRegex = /\\?"(?:bowlerStriker|bowlerNonStriker)\\?":\s*\{[^}]*?\\?"name\\?":\s*\\?"([^"\\]+)\\?"[^}]*?\\?"overs\\?":\s*([\d.]+)[^}]*?\\?"maidens\\?":\s*(\d+)[^}]*?\\?"runs\\?":\s*(\d+)[^}]*?\\?"wickets\\?":\s*(\d+)/g;
-    let bwm;
-    while ((bwm = bowlRegex.exec(html)) !== null) {
-      if (bwm[1] && bwm[1] !== "undefined") {
-        mergePlayer(players, {
-          name: bwm[1],
-          oversBowled: parseFloat(bwm[2]) || 0,
-          maidens: parseInt(bwm[3]) || 0,
-          runsConceded: parseInt(bwm[4]) || 0,
-          wickets: parseInt(bwm[5]) || 0,
-        });
+    // If scorecard gave us players, use those; otherwise fall back to miniscore
+    if (scorecardPlayers.length > 0) {
+      for (const sp of scorecardPlayers) {
+        mergePlayer(players, sp);
       }
-    }
-
-    // Also extract from lastWicket for dismissed batsmen: "lastWicket":"Saad Baig ... 30(23) - 87/3"
-    const lastWicketRegex = /\\?"lastWicket\\?":\s*\\?"([^"\\]+)\s+(\d+)\((\d+)\)/g;
-    let lwm;
-    while ((lwm = lastWicketRegex.exec(html)) !== null) {
-      const name = lwm[1].trim().replace(/\s+[cb]\s+.*/, '').trim();
-      if (name && name.length > 2) {
-        mergePlayer(players, {
-          name,
-          runs: parseInt(lwm[2]) || 0,
-          balls: parseInt(lwm[3]) || 0,
-          out: true,
-        });
+    } else {
+      // Miniscore fallback: current batsmen
+      const batRegex = /\\?"(?:batsmanStriker|batsmanNonStriker)\\?":\s*\{[^}]*?\\?"name\\?":\s*\\?"([^"\\]+)\\?"[^}]*?\\?"runs\\?":\s*(\d+)[^}]*?\\?"balls\\?":\s*(\d+)[^}]*?\\?"fours\\?":\s*(\d+)[^}]*?\\?"sixes\\?":\s*(\d+)/g;
+      let bm;
+      while ((bm = batRegex.exec(html)) !== null) {
+        if (bm[1] && bm[1] !== "undefined") {
+          mergePlayer(players, { name: bm[1], runs: parseInt(bm[2]) || 0, balls: parseInt(bm[3]) || 0, fours: parseInt(bm[4]) || 0, sixes: parseInt(bm[5]) || 0 });
+        }
+      }
+      // Miniscore fallback: current bowlers
+      const bowlRegex = /\\?"(?:bowlerStriker|bowlerNonStriker)\\?":\s*\{[^}]*?\\?"name\\?":\s*\\?"([^"\\]+)\\?"[^}]*?\\?"overs\\?":\s*([\d.]+)[^}]*?\\?"maidens\\?":\s*(\d+)[^}]*?\\?"runs\\?":\s*(\d+)[^}]*?\\?"wickets\\?":\s*(\d+)/g;
+      let bwm;
+      while ((bwm = bowlRegex.exec(html)) !== null) {
+        if (bwm[1] && bwm[1] !== "undefined") {
+          mergePlayer(players, { name: bwm[1], oversBowled: parseFloat(bwm[2]) || 0, maidens: parseInt(bwm[3]) || 0, runsConceded: parseInt(bwm[4]) || 0, wickets: parseInt(bwm[5]) || 0 });
+        }
+      }
+      // Last wicket
+      const lastWicketRegex = /\\?"lastWicket\\?":\s*\\?"([^"\\]+)\s+(\d+)\((\d+)\)/g;
+      let lwm;
+      while ((lwm = lastWicketRegex.exec(html)) !== null) {
+        const name = lwm[1].trim().replace(/\s+[cb]\s+.*/, '').trim();
+        if (name && name.length > 2) {
+          mergePlayer(players, { name, runs: parseInt(lwm[2]) || 0, balls: parseInt(lwm[3]) || 0, out: true });
+        }
       }
     }
 
@@ -376,6 +361,106 @@ async function tryCricbuzz(
   } catch (err) {
     console.log(`Cricbuzz failed for match ${match.id}:`, err);
     return null;
+  }
+}
+
+// ─── Parse full scorecard page for all batsmen, bowlers, and fielding ───
+function parseScorecardPlayers(html: string): PlayerStats[] {
+  const players: PlayerStats[] = [];
+
+  // Extract ALL batsmen from scorecard RSC data
+  // Pattern: "batName":"Player Name","runs":X,"balls":Y,...,"fours":Z,"sixes":W
+  // Also handle escaped quotes: \"batName\":\"Player Name\"
+  const batRegex = /\\?"batName\\?":\s*\\?"([^"\\]+)\\?"[^}]*?\\?"runs\\?":\s*(\d+)[^}]*?\\?"balls\\?":\s*(\d+)[^}]*?\\?"fours\\?":\s*(\d+)[^}]*?\\?"sixes\\?":\s*(\d+)/g;
+  let bm;
+  while ((bm = batRegex.exec(html)) !== null) {
+    const name = bm[1];
+    if (!name || name === "undefined") continue;
+
+    // Check outDesc for this batsman
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const outDescRegex = new RegExp(`\\\\?"batName\\\\?":\\s*\\\\?"${escapedName}\\\\?"[^}]*?\\\\?"outDesc\\\\?":\\s*\\\\?"([^"\\\\]*?)\\\\?"`, 'g');
+    const outMatch = outDescRegex.exec(html);
+    const outDesc = outMatch ? outMatch[1] : "";
+    const isOut = outDesc ? !outDesc.includes("not out") && outDesc !== "" && outDesc !== "batting" : false;
+
+    mergePlayer(players, {
+      name,
+      runs: parseInt(bm[2]) || 0,
+      balls: parseInt(bm[3]) || 0,
+      fours: parseInt(bm[4]) || 0,
+      sixes: parseInt(bm[5]) || 0,
+      out: isOut || undefined,
+    });
+
+    // Extract fielding stats from outDesc
+    if (outDesc && !outDesc.includes("not out") && outDesc !== "" && outDesc !== "batting") {
+      extractFieldingFromOutDesc(players, outDesc);
+    }
+  }
+
+  // Extract ALL bowlers from scorecard RSC data
+  const bowlRegex = /\\?"bowlName\\?":\s*\\?"([^"\\]+)\\?"[^}]*?\\?"overs\\?":\s*([\d.]+)[^}]*?\\?"maidens\\?":\s*(\d+)[^}]*?\\?"runs\\?":\s*(\d+)[^}]*?\\?"wickets\\?":\s*(\d+)/g;
+  let bwm;
+  while ((bwm = bowlRegex.exec(html)) !== null) {
+    const name = bwm[1];
+    if (!name || name === "undefined") continue;
+    mergePlayer(players, {
+      name,
+      oversBowled: parseFloat(bwm[2]) || 0,
+      maidens: parseInt(bwm[3]) || 0,
+      runsConceded: parseInt(bwm[4]) || 0,
+      wickets: parseInt(bwm[5]) || 0,
+    });
+  }
+
+  return players;
+}
+
+// ─── Extract fielding credits from dismissal descriptions ───
+function extractFieldingFromOutDesc(players: PlayerStats[], outDesc: string) {
+  // Catch: "c FielderName b BowlerName" or "c & b BowlerName"
+  const catchMatch = outDesc.match(/^c\s+(.+?)\s+b\s+/);
+  if (catchMatch) {
+    const fielder = catchMatch[1].trim();
+    // "c & b" means bowler caught it themselves — skip separate fielder credit
+    if (fielder !== "&" && fielder.length > 1) {
+      mergePlayer(players, { name: fielder, catches: 1 });
+    }
+  }
+
+  // "c & b BowlerName" — bowler gets the catch
+  const cAndBMatch = outDesc.match(/^c & b\s+(.+)/);
+  if (cAndBMatch) {
+    const bowler = cAndBMatch[1].trim();
+    if (bowler.length > 1) {
+      mergePlayer(players, { name: bowler, catches: 1 });
+    }
+  }
+
+  // Stumping: "st FielderName b BowlerName"
+  const stumpMatch = outDesc.match(/^st\s+(.+?)\s+b\s+/);
+  if (stumpMatch) {
+    const keeper = stumpMatch[1].trim();
+    if (keeper.length > 1) {
+      mergePlayer(players, { name: keeper, stumpings: 1 });
+    }
+  }
+
+  // Run out: "run out (FielderName)" or "run out (Fielder1/Fielder2)"
+  const runOutMatch = outDesc.match(/run out\s*\(([^)]+)\)/);
+  if (runOutMatch) {
+    const fielderStr = runOutMatch[1].trim();
+    const fielders = fielderStr.split('/').map(f => f.trim()).filter(f => f.length > 1);
+    if (fielders.length === 1) {
+      // Direct run out
+      mergePlayer(players, { name: fielders[0], runOuts: 1 });
+    } else if (fielders.length >= 2) {
+      // First fielder = direct hit (gets runOut), others involved too
+      mergePlayer(players, { name: fielders[0], runOuts: 1 });
+      // Second fielder contributed but indirect — still credit a runOut
+      mergePlayer(players, { name: fielders[1], runOuts: 1 });
+    }
   }
 }
 
