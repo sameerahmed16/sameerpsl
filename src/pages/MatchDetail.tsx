@@ -690,6 +690,13 @@ const MatchDetail = () => {
               </div>
             )}
 
+            {existingTeam && !isLocked && (
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-sm font-display font-semibold">
+                <span className="text-base">✅</span>
+                <span>Team saved! You can still make changes before the match locks.</span>
+              </div>
+            )}
+
             {!isLocked && (
               <div className="sticky bottom-20 z-10 space-y-2">
                 {isValid && (
@@ -706,7 +713,7 @@ const MatchDetail = () => {
                   disabled={!isValid || saveMutation.isPending}
                   className="w-full gradient-primary text-primary-foreground font-display font-bold text-base py-6 shadow-glow disabled:opacity-40"
                 >
-                  {saveMutation.isPending ? 'Saving...' : `Save Team (${selected.size}/11)`}
+                  {saveMutation.isPending ? 'Saving...' : existingTeam ? `Update Team (${selected.size}/11)` : `Save Team (${selected.size}/11)`}
                 </Button>
               </div>
             )}

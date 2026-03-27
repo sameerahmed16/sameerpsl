@@ -68,6 +68,40 @@ Deno.serve(async (req) => {
       );
     }
 
+    // ── Auto-discover real CricAPI match IDs ──
+    if (CRICAPI_KEY) {
+      const needsDiscovery = liveMatches.filter(m =>
+        !m.external_id || isUUID(m.external_id) || (!m.cricbuzz_match_id && !m.espn_match_id)
+      );
+      if (needsDiscovery.length > 0) {
+        try {
+          const apiData = await apiFetch(
+            `${CRICAPI_BASE}/currentMatches?apikey=${encodeURIComponent(CRICAPI_KEY)}&offset=0`,
+            supabase
+          );
+          if (apiData.status === "success" && apiData.data) {
+            for (const dbMatch of needsDiscovery) {
+              const found = apiData.data.find((cm: any) => {
+                if (!cm.id || !cm.name) return false;
+                const nameLower = cm.name.toLowerCase();
+                const teamANorm = dbMatch.team_a.toLowerCase();
+                const teamBNorm = dbMatch.team_b.toLowerCase();
+                return (nameLower.includes(teamANorm) || nameLower.includes(teamBNorm)) &&
+                       (nameLower.includes(teamANorm) && nameLower.includes(teamBNorm));
+              });
+              if (found) {
+                console.log(`Auto-discovered CricAPI ID ${found.id} for match ${dbMatch.id} (${dbMatch.team_a} vs ${dbMatch.team_b})`);
+                await supabase.from("matches").update({ external_id: found.id }).eq("id", dbMatch.id);
+                dbMatch.external_id = found.id;
+              }
+            }
+          }
+        } catch (err) {
+          console.log("Auto-discovery of match IDs failed:", err);
+        }
+      }
+    }
+
     // ── Load alias map once ──
     const aliasMap = await loadAliasMap(supabase);
 
@@ -742,6 +776,10 @@ async function updatePlayingXI(
 }
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
+
+function isUUID(str: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+}
 
 function normalizeName(name: string): string {
   return name
