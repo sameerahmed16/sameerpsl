@@ -8,7 +8,9 @@ import { toast } from 'sonner';
 import { Mail, Lock, User, ArrowRight, CheckCircle2, XCircle } from 'lucide-react';
 
 const Auth = () => {
-  const [isLogin, setIsLogin] = useState(true);
+  const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
+  const isLogin = mode === 'login';
+  const isForgot = mode === 'forgot';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
@@ -42,7 +44,14 @@ const Auth = () => {
     setLoading(true);
 
     try {
-      if (isLogin) {
+      if (isForgot) {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+        if (error) throw error;
+        toast.success('Password reset link sent! Check your email. 📧');
+        setMode('login');
+      } else if (isLogin) {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         toast.success('Welcome back! 🏏');
@@ -87,12 +96,12 @@ const Auth = () => {
             <span className="text-gradient-gold ml-1">PSL</span>
           </h1>
           <p className="text-sm text-muted-foreground mt-2">
-            {isLogin ? 'Sign in to your account' : 'Create your account'}
+            {isForgot ? 'Reset your password' : isLogin ? 'Sign in to your account' : 'Create your account'}
           </p>
         </div>
 
         <form onSubmit={handleAuth} className="space-y-4">
-          {!isLogin && (
+          {mode === 'signup' && (
             <div className="space-y-2">
               <Label htmlFor="username" className="text-foreground">Username</Label>
               <div className="relative">
@@ -140,58 +149,81 @@ const Auth = () => {
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="password" className="text-foreground">Password</Label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="pl-10 bg-card border-border text-foreground"
-                minLength={6}
-                required
-              />
+          {!isForgot && (
+            <div className="space-y-2">
+              <Label htmlFor="password" className="text-foreground">Password</Label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="pl-10 bg-card border-border text-foreground"
+                  minLength={6}
+                  required
+                />
+              </div>
+              {isLogin && (
+                <button
+                  type="button"
+                  onClick={() => setMode('forgot')}
+                  className="text-xs text-primary hover:underline font-display"
+                >
+                  Forgot password?
+                </button>
+              )}
             </div>
-          </div>
+          )}
 
           <Button
             type="submit"
-            disabled={loading || (!isLogin && usernameAvailable === false)}
+            disabled={loading || (mode === 'signup' && usernameAvailable === false)}
             className="w-full gradient-primary text-primary-foreground font-display font-bold py-5"
           >
-            {loading ? 'Loading...' : isLogin ? 'Sign In' : 'Create Account'}
+            {loading ? 'Loading...' : isForgot ? 'Send Reset Link' : isLogin ? 'Sign In' : 'Create Account'}
             <ArrowRight className="w-4 h-4 ml-2" />
           </Button>
         </form>
 
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t border-border" />
-          </div>
-          <div className="relative flex justify-center text-xs">
-            <span className="bg-background px-2 text-muted-foreground">or</span>
-          </div>
-        </div>
+        {!isForgot && (
+          <>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-border" />
+              </div>
+              <div className="relative flex justify-center text-xs">
+                <span className="bg-background px-2 text-muted-foreground">or</span>
+              </div>
+            </div>
 
-        <Button
-          variant="outline"
-          onClick={handleGoogleLogin}
-          className="w-full border-border text-foreground font-display"
-        >
-          Continue with Google
-        </Button>
+            <Button
+              variant="outline"
+              onClick={handleGoogleLogin}
+              className="w-full border-border text-foreground font-display"
+            >
+              Continue with Google
+            </Button>
+          </>
+        )}
 
         <p className="text-center text-sm text-muted-foreground">
-          {isLogin ? "Don't have an account?" : 'Already have an account?'}{' '}
-          <button
-            onClick={() => setIsLogin(!isLogin)}
-            className="text-primary hover:underline font-display font-semibold"
-          >
-            {isLogin ? 'Sign up' : 'Sign in'}
-          </button>
+          {isForgot ? (
+            <button onClick={() => setMode('login')} className="text-primary hover:underline font-display font-semibold">
+              Back to sign in
+            </button>
+          ) : isLogin ? (
+            <>
+              Don't have an account?{' '}
+              <button onClick={() => setMode('signup')} className="text-primary hover:underline font-display font-semibold">Sign up</button>
+            </>
+          ) : (
+            <>
+              Already have an account?{' '}
+              <button onClick={() => setMode('login')} className="text-primary hover:underline font-display font-semibold">Sign in</button>
+            </>
+          )}
         </p>
       </div>
     </div>
