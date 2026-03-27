@@ -378,7 +378,14 @@ async function tryCricbuzz(
     }
 
     console.log(`Cricbuzz: scores ${teamAScore} / ${teamBScore}, ${players.length} players, ended=${matchEnded}`);
-    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz" };
+    // Extract winning team from status text in the HTML
+    let winningTeam: string | null = null;
+    if (matchEnded) {
+      const statusRegex = /\\?"status\\?":\s*\\?"([^"\\]+)\\?"/;
+      const statusMatch = html.match(statusRegex);
+      winningTeam = extractWinningTeam(statusMatch?.[1], match.team_a, match.team_b);
+    }
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam };
   } catch (err) {
     console.log(`Cricbuzz failed for match ${match.id}:`, err);
     return null;
@@ -563,7 +570,7 @@ function parseCricbuzzRSC(html: string, match: any): NormalizedScorecard | null 
       });
     }
 
-    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz" };
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam: null };
   } catch (_) {
     return null;
   }
@@ -627,7 +634,8 @@ function parseCricbuzzCommentary(data: any, match: any): NormalizedScorecard | n
       }
     }
 
-    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz" };
+    const winningTeam = matchEnded ? extractWinningTeam(matchHeader.status, match.team_a, match.team_b) : null;
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam };
   } catch (_) {
     return null;
   }
@@ -660,7 +668,7 @@ function parseCricbuzzHTML(html: string, match: any): NormalizedScorecard | null
     }
   }
 
-  return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz" };
+  return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam: null };
 }
 
 // ─── Source 3: ESPN Cricinfo (Modern API) ──────────────────────────────────
@@ -734,7 +742,8 @@ async function tryESPNModern(
 
     if (!teamAScore && !teamBScore) return null;
     console.log(`ESPN modern API succeeded for match ${match.id}, found ${players.length} players`);
-    return { teamAScore, teamBScore, matchEnded, players, source: "espn" };
+    const winningTeam = matchEnded ? extractWinningTeam(matchInfo?.statusText || matchInfo?.status, match.team_a, match.team_b) : null;
+    return { teamAScore, teamBScore, matchEnded, players, source: "espn", winningTeam };
   } catch (err) {
     console.log(`ESPN modern API failed for match ${match.id}:`, err);
     return null;
@@ -795,7 +804,8 @@ async function tryESPNLegacy(
 
     if (!teamAScore && !teamBScore) return null;
     console.log(`ESPN legacy succeeded for match ${match.id}, found ${players.length} players`);
-    return { teamAScore, teamBScore, matchEnded, players, source: "espn" };
+    const winningTeam = matchEnded ? extractWinningTeam(data.match?.match_status_text || data.match?.result, match.team_a, match.team_b) : null;
+    return { teamAScore, teamBScore, matchEnded, players, source: "espn", winningTeam };
   } catch (err) {
     console.log(`ESPN legacy failed for match ${match.id}:`, err);
     return null;
