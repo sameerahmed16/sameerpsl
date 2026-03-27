@@ -1,47 +1,60 @@
 
-## Plan: Restore the published site on the live domain
+## Plan: Fix the live domain showing the placeholder instead of your app
 
 ### What I found
-- The live URL is published and public, but it serves the default placeholder: “Your app will live here”.
-- That means the issue is not your app code crashing on the live site.
-- It strongly suggests the live frontend deployment was never updated from the placeholder build, or the custom domain is attached to that unchanged live deployment.
+- Your project is marked **published** and **public**.
+- `src/App.tsx` clearly contains the real app with routes for auth, leaderboard, match detail, profile, etc.
+- But both live URLs currently return the default placeholder:
+  - `https://sameerpsl.lovable.app`
+  - `https://pslfantasyleague.live`
 
-### What I will do
-1. **Verify live deployment state**
-   - Confirm the published deployment is still the placeholder build rather than your current app.
+So this does **not** look like a React/runtime bug. It looks like the live site is still pointing at an old placeholder deployment or the domain mapping is attached to the wrong published build.
 
-2. **Check publish/domain setup**
-   - Confirm the live `.lovable.app` deployment and your custom domain are pointing to the same active published site.
-   - If the custom domain is attached correctly but the published build is stale, no code fix is needed.
+### Plan
+1. **Verify publish target vs live output**
+   - Confirm the live published deployment is not serving the current frontend bundle.
+   - Treat this as a deployment/domain issue, not an app code issue.
 
-3. **Bring the frontend live**
-   - Re-publish/update the frontend so the current app replaces the placeholder on the published site.
-   - This is important because frontend changes only go live after an explicit publish/update.
-
-4. **Re-test both live URLs**
-   - Verify both:
+2. **Check the project’s domain connection**
+   - Review the domain settings for:
      - `sameerpsl.lovable.app`
      - `pslfantasyleague.live`
-   - Confirm they show the real app instead of the placeholder.
+   - Confirm the custom domain is attached to this exact project and not an older/placeholder deployment.
 
-### Expected outcome
-- Your published domain should load the actual PSL Fantasy Hub app.
-- If the custom domain still shows the placeholder after publish, the next fix is at the domain mapping level, not in React code.
+3. **Force-refresh the live deployment**
+   - Re-publish the frontend so the current app bundle replaces the placeholder build.
+   - If Lovable still says “up to date,” the recovery path is to republish/reconnect rather than edit code.
 
-### Technical note
-The screenshot and live fetch both show the default placeholder page, while your project code clearly contains a real routed app. So this looks like a **publishing/configuration issue**, not a runtime bug in `src/App.tsx`.
+4. **Re-test both domains**
+   - Verify that both the Lovable subdomain and the custom domain show the actual app instead of the placeholder.
 
-### Likely fix path
+5. **Fallback if it still shows placeholder**
+   - Remove and reconnect the custom domain if only the custom domain is wrong.
+   - If **both** domains still show the placeholder after republishing, escalate as a platform publishing issue because the project code and publish visibility are already correct.
+
+### Expected result
 ```text
-Current state:
-Preview/Test app -> real app
-Published site   -> placeholder
+Current:
+Preview -> real app
+Published subdomain -> placeholder
+Custom domain -> placeholder
 
-Target state:
-Preview/Test app -> real app
-Published site   -> same real app
-Custom domain    -> same real app
+After fix:
+Preview -> real app
+Published subdomain -> real app
+Custom domain -> real app
 ```
 
-### Files/code
-- No app code changes are likely needed for this issue unless a later live test reveals a separate runtime problem after publishing.
+### No code changes expected
+- I do not currently expect any file edits.
+- The issue appears to be in live publishing/domain linkage, not in the app source.
+
+### Likely user-facing fix path
+- Open **Publish**
+- Try **Update** again
+- If unchanged, open **Settings → Domains**
+- Verify `pslfantasyleague.live` is connected to this project
+- If needed, disconnect/reconnect the domain and republish
+
+### Important note
+Because the **Lovable subdomain itself** is also showing the placeholder, the primary issue is likely the live frontend deployment state, with the custom domain inheriting that same bad target.
