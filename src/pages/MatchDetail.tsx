@@ -399,7 +399,8 @@ const MatchDetail = () => {
     return allPlayers.filter(p => selected.has(p.id));
   }, [allPlayers, selected, dbPlayers, existingTeam, isLiveOrCompleted]);
   const usedCredits = selectedPlayers.reduce((sum, p) => sum + Number(p.credits), 0);
-  const remainingCredits = BUDGET - usedCredits;
+  const matchBudget = getBudget(match?.match_date);
+  const remainingCredits = matchBudget - usedCredits;
 
   const roleCounts = useMemo(() => {
     const counts: Record<PlayerRole, number> = { WK: 0, BAT: 0, AR: 0, BOWL: 0 };
@@ -638,7 +639,7 @@ const MatchDetail = () => {
                 <span className="text-muted-foreground">Credits: <span className={cn("font-display font-bold", remainingCredits < 10 ? "text-destructive" : "text-secondary")}>{remainingCredits.toFixed(1)}</span></span>
               </div>
               <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                <div className="h-full gradient-primary transition-all duration-300 rounded-full" style={{ width: `${(usedCredits / BUDGET) * 100}%` }} />
+                <div className="h-full gradient-primary transition-all duration-300 rounded-full" style={{ width: `${(usedCredits / matchBudget) * 100}%` }} />
               </div>
               <div className="flex gap-2 mt-2">
                 {(Object.entries(ROLE_CONSTRAINTS) as [PlayerRole, [number, number]][]).map(([role, [min, max]]) => (
