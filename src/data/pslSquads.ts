@@ -1,4 +1,4 @@
-// PSL 2026 squad data — scraped from Cricbuzz official squads page (March 26, 2026)
+// PSL 2026 squad data — updated with trade window moves, withdrawals & replacements (March 27, 2026)
 
 type PlayerRole = 'BAT' | 'BOWL' | 'AR' | 'WK';
 
@@ -44,6 +44,11 @@ const starPlayers: Record<string, number> = {
   'Peter Siddle': 7.5, 'Riley Meredith': 7.5, 'Shamar Joseph': 8,
   'Nahid Rana': 7.5, 'Sufiyan Muqeem': 7.5, 'Mohammad Wasim Jr': 8,
   'Khushdil Shah': 7, 'Dipendra Singh Airee': 7.5,
+  // New additions from trade window / replacements
+  'Chris Green': 7, 'Daniel Sams': 8, 'Ryan Burl': 7.5,
+  'Usman Khawaja': 9, 'Maheesh Theekshana': 8, 'Shoriful Islam': 7.5,
+  'Brian Bennett': 7, 'Arafat Minhas': 7, 'Faisal Akram': 6.5,
+  'Salman Mirza': 7, 'Cole McConchie': 7,
 };
 
 const getCredits = (name: string): number => starPlayers[name] || 6.5;
@@ -76,7 +81,6 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Faheem Ashraf', role: 'Bowling Allrounder' },
     { name: 'Haider Ali', role: 'Batsman' },
     { name: 'Mohammad Hasnain', role: 'Bowler' },
-    { name: 'Max Bryant', role: 'Batsman' },
     { name: 'Sameer Minhas', role: 'Batsman' },
     { name: 'Mark Chapman', role: 'Batsman' },
     { name: 'Dipendra Singh Airee', role: 'Batting Allrounder' },
@@ -84,10 +88,14 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Richard Gleeson', role: 'Bowler' },
     { name: 'Shamar Joseph', role: 'Bowler' },
     { name: 'Mehran Mumtaz', role: 'Bowler' },
-    { name: 'Mohammad Wasim Jr', role: 'Bowler' },
     { name: 'Salman Irshad', role: 'Bowler' },
     { name: 'Sameen Gul', role: 'Bowler' },
     { name: 'Hamza Sajjad', role: 'Bowler' },
+    // New: trades & replacements
+    { name: 'Salman Mirza', role: 'Bowler' },
+    { name: 'Nisar Ahmed', role: 'Bowler' },
+    { name: 'Chris Green', role: 'Bowling Allrounder' },
+    { name: 'Mohsin Riaz', role: 'Bowler' },
   ]),
   'Karachi Kings': buildSquad('Karachi Kings', [
     { name: 'David Warner (Captain)', role: 'Batsman' },
@@ -128,7 +136,10 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Parvez Hossain Emon', role: 'WK-Batsman' },
     { name: 'Rubin Hermann', role: 'WK-Batsman' },
     { name: 'Ubaid Shah', role: 'Bowler' },
-    { name: 'Gudakesh Motie', role: 'Bowler' },
+    // New replacements
+    { name: 'Daniel Sams', role: 'Bowling Allrounder' },
+    { name: 'Shahab Khan', role: 'Bowler' },
+    { name: 'Ryan Burl', role: 'Batting Allrounder' },
   ]),
   'Peshawar Zalmi': buildSquad('Peshawar Zalmi', [
     { name: 'Babar Azam (Captain)', role: 'Batsman' },
@@ -149,6 +160,10 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Nahid Rana', role: 'Bowler' },
     { name: 'Sufiyan Muqeem', role: 'Bowler' },
     { name: 'Khurram Shahzad', role: 'Bowler' },
+    // New additions
+    { name: 'Farhan Yousuf', role: 'Batsman' },
+    { name: 'Shoriful Islam', role: 'Bowler' },
+    { name: 'Brian Bennett', role: 'Batting Allrounder' },
   ]),
   'Quetta Gladiators': buildSquad('Quetta Gladiators', [
     { name: 'Saud Shakeel', role: 'Batting Allrounder' },
@@ -161,7 +176,6 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Bevon Jacobs', role: 'Batsman' },
     { name: 'Shamyl Hussain', role: 'Batsman' },
     { name: 'Ahsan Ali', role: 'Batsman' },
-    { name: 'Jahanzaib Sultan', role: 'Batsman' },
     { name: 'Jahandad Khan', role: 'Bowling Allrounder' },
     { name: 'Brett Hampton', role: 'Bowling Allrounder' },
     { name: 'Bismillah Khan', role: 'WK-Batsman' },
@@ -171,7 +185,9 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Wasim Akram', role: 'Bowler' },
     { name: 'Khan Zaib', role: 'Bowler' },
     { name: 'Saqib Khan', role: 'Bowler' },
-    { name: 'Ahmed Daniyal', role: 'Bowler' },
+    // Traded IN from Multan
+    { name: 'Ahmad Daniyal', role: 'Bowler' },
+    { name: 'Jahanzaib Sultan', role: 'Batsman' },
   ]),
   'Hyderabad Kingsmen': buildSquad('Hyderabad Kingsmen', [
     { name: 'Marnus Labuschagne', role: 'Batsman' },
@@ -192,6 +208,8 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Hunain Shah', role: 'Bowler' },
     { name: 'Riley Meredith', role: 'Bowler' },
     { name: 'Mohammad Ali', role: 'Bowler' },
+    // New addition
+    { name: 'Maheesh Theekshana', role: 'Bowler' },
   ]),
   'Rawalpindi Pindiz': buildSquad('Rawalpindi Pindiz', [
     { name: 'Mohammad Rizwan (Captain)', role: 'WK-Batsman' },
@@ -201,7 +219,6 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Kamran Ghulam', role: 'Batting Allrounder' },
     { name: 'Mohammad Amir', role: 'Bowler' },
     { name: 'Abdullah Fazal', role: 'Batsman' },
-    { name: 'Laurie Evans', role: 'Batsman' },
     { name: 'Shahzaib Khan', role: 'Batsman' },
     { name: 'Yasir Khan', role: 'Batsman' },
     { name: 'Dian Forrester', role: 'Batting Allrounder' },
@@ -211,7 +228,10 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Rishad Hossain', role: 'Bowler' },
     { name: 'Fawad Ali', role: 'Bowler' },
     { name: 'Mohammad Amir Khan', role: 'Bowler' },
-    { name: 'Zaman Khan', role: 'Bowler' },
+    // New: replacements & trades
+    { name: 'Saad Masood', role: 'Batting Allrounder' },
+    { name: 'Jalat Khan', role: 'Bowler' },
+    { name: 'Usman Khawaja', role: 'Batsman' },
   ]),
   'Multan Sultans': buildSquad('Multan Sultans', [
     { name: 'Ashton Turner', role: 'Batting Allrounder' },
@@ -223,14 +243,20 @@ export const PSL_SQUADS: Record<string, FallbackPlayer[]> = {
     { name: 'Awais Zafar', role: 'Batsman' },
     { name: 'Sahibzada Farhan', role: 'Batsman' },
     { name: 'Delano Potgieter', role: 'Batting Allrounder' },
-    { name: 'Saad Masood', role: 'Batting Allrounder' },
     { name: 'Muhammad Shahzad', role: 'Batting Allrounder' },
     { name: 'Lachlan Shaw', role: 'WK-Batsman' },
     { name: 'Momin Qamar', role: 'Bowler' },
-    { name: 'Salman Mirza', role: 'Bowler' },
     { name: 'Peter Siddle', role: 'Bowler' },
     { name: 'Muhammad Ismail', role: 'Bowler' },
     { name: 'Arshad Iqbal', role: 'Bowler' },
+    // Traded IN
+    { name: 'Arafat Minhas', role: 'Batting Allrounder' },
+    { name: 'Faisal Akram', role: 'Bowling Allrounder' },
+    { name: 'Mohammad Wasim Jr', role: 'Bowler' },
+    // New additions
+    { name: 'Shehzad Gul', role: 'Bowler' },
+    { name: 'Imran Randhawa', role: 'Bowler' },
+    { name: 'Atizaz Habib Khan', role: 'Batting Allrounder' },
   ]),
 };
 
