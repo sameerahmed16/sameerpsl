@@ -1,38 +1,52 @@
 
 
-## Plan: Fix Missing Profile & Improve Team Visibility
+## Plan: Fix Live Score Sync — CricAPI Unreachable from Backend
 
-### Investigation Results
-The logged-in user (`samspamspamsam16@gmail.com`) genuinely does **not** have a team saved for the live Quetta vs Karachi match. They have teams for Multan vs Islamabad and Peshawar vs Rawalpindi only. The "You didn't create a team" message is technically correct.
+### Root Cause
+CricAPI (`api.cricapi.com`) is unreachable from the backend environment:
+- **Direct fetch**: times out from edge functions
+- **Database HTTP extension**: SSL handshake fails (`SSL_ERROR_SYSCALL`)
+- **Result**: Auto-discovery fails, CricAPI scorecard fetch fails, and Cricbuzz/ESPN fallbacks are skipped because their match IDs are NULL
 
-Additionally, this user has **no profile record** — the `handle_new_user` trigger likely failed during signup.
+The http extension works fine for other domains (tested with httpbin.org), so this is specific to CricAPI's SSL/network configuration.
 
-### Root Causes
-1. **No visual indicator on match cards** showing which matches already have a saved team — easy to lose track
-2. **Missing profile** for some users when the trigger fails silently
-3. **No helpful guidance** when viewing a live match without a team
+### Fix: Use Free Public Cricket APIs as Primary Source
 
-### Changes
+Replace CricAPI with free, accessible cricket data sources that work from edge functions:
 
-#### 1. Add "Team Created ✓" badge on match cards (`src/pages/Index.tsx`)
-- Query all `user_teams` for the logged-in user
-- Show a small green "✓ Team" badge on match cards where a team exists
-- Helps users instantly see which matches they've prepared for
+#### 1. Switch to Cricbuzz scraping as primary source (`sync-live-scores/index.ts`)
+- Use the Cricbuzz mobile API (`https://www.cricbuzz.com/api/cricket-match/commentary/{id}`) which returns JSON and doesn't require an API key
+- Auto-discover Cricbuzz match IDs by scraping `https://www.cricbuzz.com/cricket-match/live-scores` — parse the PSL match links to extract IDs
+- Store discovered `cricbuzz_match_id` on the match record
+- Keep CricAPI as a secondary fallback (in case their SSL issue is temporary)
 
-#### 2. Auto-create missing profile in AuthContext (`src/contexts/AuthContext.tsx`)
-- After auth state resolves, check if profile exists
-- If not, insert one using the user's email prefix as username
-- Prevents silent profile creation failures from breaking the app
+#### 2. Rewrite auto-discovery to use Cricbuzz (`sync-live-scores/index.ts`)
+- Fetch `https://www.cricbuzz.com/api/matches/live` (returns JSON list of live matches)
+- Match by team names to find the Cricbuzz match ID
+- Update the match record with the discovered `cricbuzz_match_id`
+- This replaces the broken CricAPI `currentMatches` discovery
 
-#### 3. Improve "no team" message on live matches (`src/pages/MatchDetail.tsx`)
-- Change "You didn't create a team for this match" to something more helpful
-- Add context like "Teams must be created before the match starts"
+#### 3. Add ESPN Cricinfo as tertiary source (`sync-live-scores/index.ts`)
+- Use `https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en` for match discovery
+- Use `https://hs-consumer-api.espncricinfo.com/v1/pages/match/scoreboard?lang=en&matchId={id}` for scorecard
+- Store discovered `espn_match_id` on the match record
+
+#### 4. Reorder source priority
+```text
+1. Cricbuzz JSON API (free, no key, JSON response)
+2. ESPN Cricinfo API (free, no key, JSON response)  
+3. CricAPI (paid, requires key, currently broken SSL)
+```
 
 ### Files
 
 | Action | File | What |
 |--------|------|------|
-| Edit | `src/pages/Index.tsx` | Add "Team Created" badge on match cards |
-| Edit | `src/contexts/AuthContext.tsx` | Auto-create missing profile on login |
-| Edit | `src/pages/MatchDetail.tsx` | Improve no-team message for live matches |
+| Edit | `supabase/functions/sync-live-scores/index.ts` | Rewrite discovery + source priority to use Cricbuzz/ESPN first |
+
+### Technical Notes
+- No database changes needed — `cricbuzz_match_id` and `espn_match_id` columns already exist
+- No new API keys needed — Cricbuzz and ESPN public endpoints are free
+- The cron job frequency stays the same (every minute)
+- If Cricbuzz/ESPN also fail from edge functions, we'll add the database http extension as a fetch fallback for those domains too (it works for non-CricAPI domains)
 
