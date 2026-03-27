@@ -269,10 +269,27 @@ async function tryCricAPI(
 
 async function tryCricbuzz(
   cricbuzzId: string,
-  match: any
+  match: any,
+  supabase?: any
 ): Promise<NormalizedScorecard | null> {
   try {
-    // Try the commentary JSON endpoint first (structured data)
+    // Primary: scrape scorecard page via DB http extension (bypasses edge function network issues)
+    if (supabase) {
+      try {
+        const { data: html, error } = await supabase.rpc("http_get_text", {
+          target_url: `https://www.cricbuzz.com/live-cricket-scorecard/${cricbuzzId}`
+        });
+        if (!error && html) {
+          const result = parseCricbuzzRSC(html, match);
+          if (result) {
+            console.log(`Cricbuzz RSC scorecard succeeded for match ${match.id}, ${result.players.length} players`);
+            return result;
+          }
+        }
+      } catch (_) { /* fall through */ }
+    }
+
+    // Fallback: direct fetch
     const commentaryUrl = `https://www.cricbuzz.com/match-api/${cricbuzzId}/commentary.json`;
     let resp = await fetchWithTimeout(commentaryUrl, 10000, { "User-Agent": BROWSER_UA });
     
@@ -284,22 +301,96 @@ async function tryCricbuzz(
           console.log(`Cricbuzz commentary JSON succeeded for match ${match.id}`);
           return result;
         }
-      } catch (_) { /* fall through to scorecard */ }
+      } catch (_) { /* fall through */ }
     }
 
-    // Fallback: try the scorecard API
-    const scorecardUrl = `https://www.cricbuzz.com/api/html/cricket-scorecard/${cricbuzzId}`;
-    resp = await fetchWithTimeout(scorecardUrl, 10000, { "User-Agent": BROWSER_UA });
-    if (!resp.ok) return null;
-
-    const html = await resp.text();
-    const result = parseCricbuzzHTML(html, match);
-    if (result) {
-      console.log(`Cricbuzz HTML fallback succeeded for match ${match.id}`);
-    }
-    return result;
+    return null;
   } catch (err) {
     console.log(`Cricbuzz failed for match ${match.id}:`, err);
+    return null;
+  }
+}
+
+// Parse Cricbuzz Next.js RSC payload embedded in the scorecard HTML page
+function parseCricbuzzRSC(html: string, match: any): NormalizedScorecard | null {
+  try {
+    const players: PlayerStats[] = [];
+    let teamAScore: string | null = null;
+    let teamBScore: string | null = null;
+    let matchEnded = false;
+
+    // Check match status
+    if (html.includes('"state":"Complete"') || html.includes('won by') || html.includes('"matchEnded":true')) {
+      matchEnded = true;
+    }
+
+    // Extract score info from RSC: look for "runs":N,"wickets":N,"overs":N patterns near team names
+    // Extract innings scores: pattern like "scoreTitle":"Team Innings","runs":150,"wickets":5,"overs":18.2
+    const scoreRegex = /"(?:scoreTitle|inningsId)"[^}]*?"runs":(\d+)[^}]*?"wickets":(\d+)[^}]*?"overs":([\d.]+)/g;
+    let scoreMatch;
+    let inningsIdx = 0;
+    while ((scoreMatch = scoreRegex.exec(html)) !== null) {
+      const score = `${scoreMatch[1]}/${scoreMatch[2]} (${scoreMatch[3]})`;
+      if (inningsIdx % 2 === 0) {
+        teamAScore = teamAScore ? `${teamAScore} & ${score}` : score;
+      } else {
+        teamBScore = teamBScore ? `${teamBScore} & ${score}` : score;
+      }
+      inningsIdx++;
+    }
+
+    // If no structured scores found, try simple regex on the full HTML
+    if (!teamAScore && !teamBScore) {
+      const simpleScoreRegex = /(\d{1,3})\/(\d{1,2})\s*\((\d{1,2}\.?\d?)\)/g;
+      const simpleMatches = [...html.matchAll(simpleScoreRegex)];
+      if (simpleMatches.length >= 1) {
+        teamAScore = `${simpleMatches[0][1]}/${simpleMatches[0][2]} (${simpleMatches[0][3]})`;
+      }
+      if (simpleMatches.length >= 2) {
+        teamBScore = `${simpleMatches[1][1]}/${simpleMatches[1][2]} (${simpleMatches[1][3]})`;
+      }
+    }
+
+    if (!teamAScore && !teamBScore) return null;
+
+    // Extract batsmen from RSC: "batName":"Player Name","runs":X,"balls":Y,"fours":Z,"sixes":W
+    const batRegex = /"batName":"([^"]+)"[^}]*?"runs":(\d+)[^}]*?"balls":(\d+)[^}]*?"(?:dots":\d+[^}]*?")?"fours":(\d+)[^}]*?"sixes":(\d+)/g;
+    let batMatch;
+    while ((batMatch = batRegex.exec(html)) !== null) {
+      const name = batMatch[1];
+      if (!name || name === "undefined") continue;
+      // Check if out: look for outDesc near this player
+      const outDescRegex = new RegExp(`"batName":"${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^}]*?"outDesc":"([^"]*)"`, 'g');
+      const outMatch = outDescRegex.exec(html);
+      const isOut = outMatch ? !outMatch[1].includes("not out") && outMatch[1] !== "" : undefined;
+      
+      mergePlayer(players, {
+        name,
+        runs: parseInt(batMatch[2]) || 0,
+        balls: parseInt(batMatch[3]) || 0,
+        fours: parseInt(batMatch[4]) || 0,
+        sixes: parseInt(batMatch[5]) || 0,
+        out: isOut,
+      });
+    }
+
+    // Extract bowlers: "bowlName":"Player Name","overs":X,"maidens":Y,"runs":Z,"wickets":W
+    const bowlRegex = /"bowlName":"([^"]+)"[^}]*?"overs":([\d.]+)[^}]*?"maidens":(\d+)[^}]*?"runs":(\d+)[^}]*?"wickets":(\d+)/g;
+    let bowlMatch;
+    while ((bowlMatch = bowlRegex.exec(html)) !== null) {
+      const name = bowlMatch[1];
+      if (!name || name === "undefined") continue;
+      mergePlayer(players, {
+        name,
+        oversBowled: parseFloat(bowlMatch[2]) || 0,
+        maidens: parseInt(bowlMatch[3]) || 0,
+        runsConceded: parseInt(bowlMatch[4]) || 0,
+        wickets: parseInt(bowlMatch[5]) || 0,
+      });
+    }
+
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz" };
+  } catch (_) {
     return null;
   }
 }
