@@ -298,9 +298,11 @@ async function tryCricbuzz(
     let teamBScore: string | null = null;
     const players: PlayerStats[] = [];
 
-    // Check match state
+    // Check match state — try multiple patterns since Cricbuzz HTML format varies
     const stateMatch = html.match(/\\?"state\\?":\s*\\?"(Complete|In Progress|Toss|Preview)\\?"/);
-    const matchEnded = stateMatch ? stateMatch[1] === "Complete" : false;
+    const completeAlt = /["\\]?isMatchComplete["\\]?\s*:\s*true/i.test(html);
+    const statusWon = /["\\]?status["\\]?\s*:\s*["\\]?[^"\\]*\bwon\b/i.test(html);
+    const matchEnded = (stateMatch ? stateMatch[1] === "Complete" : false) || completeAlt || statusWon;
 
     // Extract innings scores from inningsScoreList in RSC data
     const inningsRegex = /\\?"inningsId\\?":\s*(\d+)\s*,\s*\\?"batTeamId\\?":\s*\d+\s*,\s*\\?"batTeamName\\?":\s*\\?"([^"\\]+)\\?"\s*,\s*\\?"score\\?":\s*(\d+)\s*,\s*\\?"wickets\\?":\s*(\d+)\s*,\s*\\?"overs\\?":\s*([\d.]+)/g;
