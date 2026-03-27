@@ -777,6 +777,10 @@ async function updatePlayingXI(
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
+function isUUID(str: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+}
+
 function normalizeName(name: string): string {
   return name
     .toLowerCase()
