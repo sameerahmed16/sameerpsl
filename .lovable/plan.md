@@ -1,57 +1,49 @@
 
 
-## Plan: Update Scoring System & Budget
+## Plan: Fix Cricbuzz Scorecard Parsing — Full Player & Fielding Stats
 
-### Summary
-1. Update the `calculatePoints` function in `sync-live-scores` to match the new scoring table
-2. Add `starting_xi` bonus (+4) and `motm` (+30) support
-3. Change budget from 100 → 85 for future matches only (based on match date)
-4. Update the Scoring Guide in the Profile page
-5. Re-invoke sync to recalculate points for the current live match
+### Problem
+The `tryCricbuzz` function only extracts data from the **miniscore** (current striker, non-striker, current bowlers, last wicket) — that's why logs show "5 players." Dismissed batsmen (like Salman Agha), bowlers who finished their spell, and all fielding stats (catches, run outs, stumpings) are missing.
 
-### Scoring Changes (Current + Future Matches)
+### Solution
+Fetch the Cricbuzz **scorecard page** (`/live-cricket-scorecard/{id}`) in addition to the live scores page, and parse the full RSC payload which contains all batsmen, bowlers, and dismissal descriptions.
 
-Current → New values:
+### Changes to `supabase/functions/sync-live-scores/index.ts`
 
-| Category | Current | New |
-|----------|---------|-----|
-| Starting XI | not tracked | +4 |
-| Run | +1 | +1 (same) |
-| Four | +1 bonus | +4 total (boundary worth 4 extra) |
-| Six | +2 bonus | +6 total (six worth 6 extra) |
-| 25 runs | not tracked | +8 |
-| Fifty | +8 | +8 (same) |
-| Century | +16 | +16 (same) |
-| Duck | -2 | -2 (same) |
-| SR ranges | same thresholds | same values |
-| Wicket | +25 | +30 |
-| 3-wicket | +4 | +4 (same) |
-| 4-wicket | +8 | +8 (same) |
-| 5-wicket | +16 | +16 (same) |
-| Maiden | +12 | +12 (same) |
-| Economy ranges | same | same |
-| Catch | +8 | +8 (same) |
-| Stumping | +12 | +12 (same) |
-| Run out direct | +12 | +12 |
-| Run out indirect | not split | +6 |
-| MOTM | not tracked | +30 |
+**1. Add scorecard page fetch inside `tryCricbuzz`**
+After extracting scores from the live page, also fetch:
+```
+https://www.cricbuzz.com/live-cricket-scorecard/{cricbuzzId}
+```
+via `supabase.rpc("http_get_text", ...)` — same proxy pattern already in use.
 
-### Budget Change (Future Matches Only)
+**2. Parse full batting from RSC payload**
+Extract all batsmen using the `batName`/`runs`/`balls`/`fours`/`sixes`/`outDesc` patterns already defined in `parseCricbuzzRSC` (lines 425-443). Apply these regexes to the scorecard page HTML to get ALL batsmen including dismissed ones like Salman Agha.
 
-In `MatchDetail.tsx`, change `BUDGET` from a constant `100` to a function that checks the match date. Matches starting after today (2026-03-27) use 85 credits; the current live match keeps 100.
+**3. Parse full bowling from RSC payload**
+Same approach — `bowlName`/`overs`/`maidens`/`runs`/`wickets` patterns from lines 446-458 applied to scorecard HTML to get all bowlers.
+
+**4. Extract fielding stats from dismissal descriptions**
+Parse `outDesc` fields from the scorecard RSC data to credit fielders:
+- `"c PlayerName b ..."` → +1 catch for PlayerName
+- `"run out (PlayerName)"` or `"run out (PlayerName/...)"` → +1 run out for PlayerName
+- `"st PlayerName b ..."` → +1 stumping for PlayerName
+
+This is the only way to get fielding data from Cricbuzz since they don't have a separate fielding stats section.
+
+**5. Replace miniscore-only players with full scorecard players**
+If the scorecard page returns more players than the miniscore, use the scorecard data. Keep miniscore as fallback for when scorecard page isn't available yet (very early in match).
 
 ### Files
 
 | Action | File | What |
 |--------|------|------|
-| Edit | `supabase/functions/sync-live-scores/index.ts` | Update `calculatePoints()` with new values; add starting_xi bonus in `computePlayerPoints` |
-| Edit | `src/pages/MatchDetail.tsx` | Dynamic budget: 100 for current match, 85 for future |
-| Edit | `src/pages/Profile.tsx` | Update Scoring Guide display |
+| Edit | `supabase/functions/sync-live-scores/index.ts` | Add scorecard page fetch, full batting/bowling/fielding extraction |
 
 ### Technical Notes
-- **Starting XI bonus**: Applied in `computePlayerPoints` — every player found in the scorecard gets +4 added to their calculated points
-- **MOTM**: Cricbuzz HTML includes "Player of the Match" info; we'll parse it and add +30. If not parseable, skip (admin can set manually)
-- **Run out split**: The current `runOuts` field doesn't distinguish direct/indirect from Cricbuzz data, so we keep +12 for all run outs (same as direct) — admin can override via manual scoring
-- **Budget logic**: `const BUDGET = match && new Date(match.match_date) > new Date('2026-03-28') ? 85 : 100;`
-- After deploying, invoke `sync-live-scores` to recalculate all current match points with the new scoring
+- The scorecard page uses the same RSC format as the live scores page — same regex patterns work
+- Fielding credits are extracted from dismissal text, which is standard cricket notation
+- `mergePlayer` already handles deduplication — safe to merge scorecard data on top of miniscore data
+- No database changes needed
+- After deploying, the next cron tick will pick up all players and fielding stats
 
