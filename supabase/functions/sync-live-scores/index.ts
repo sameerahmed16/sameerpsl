@@ -35,6 +35,7 @@ interface NormalizedScorecard {
   players: PlayerStats[];
   source: "cricapi" | "cricbuzz" | "espn";
   winningTeam: string | null;
+  playerOfTheMatch: string | null;
 }
 
 // ─── Extract winning team from status text ──────────────────────────────────
@@ -389,7 +390,15 @@ async function tryCricbuzz(
       const statusMatch = html.match(statusRegex);
       winningTeam = extractWinningTeam(statusMatch?.[1], match.team_a, match.team_b);
     }
-    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam };
+    // Extract Player of the Match
+    let playerOfTheMatch: string | null = null;
+    const motmRegex = /playersOfTheMatch\\?":\s*\[\s*\{[^}]*?\\?"name\\?":\s*\\?"([^"\\]+)\\?"/;
+    const motmMatch = html.match(motmRegex);
+    if (motmMatch) {
+      playerOfTheMatch = motmMatch[1];
+      console.log(`Cricbuzz: MOTM = ${playerOfTheMatch}`);
+    }
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam, playerOfTheMatch };
   } catch (err) {
     console.log(`Cricbuzz failed for match ${match.id}:`, err);
     return null;
