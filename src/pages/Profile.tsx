@@ -84,12 +84,23 @@ const Profile = () => {
           <h2 className="font-display font-bold text-foreground mb-3">Scoring Guide</h2>
           <div className="space-y-2 text-sm">
             {[
+              ['Starting XI', '+4'],
               ['Run scored', '+1'],
-              ['Boundary', '+1'],
-              ['Six', '+2'],
-              ['Wicket', '+25'],
+              ['Boundary (4)', '+4'],
+              ['Six', '+6'],
+              ['25 runs', '+8'],
+              ['Half century', '+8'],
+              ['Century', '+16'],
+              ['Duck', '-2'],
+              ['Wicket', '+30'],
+              ['3-wicket haul', '+4'],
+              ['4-wicket haul', '+8'],
+              ['5-wicket haul', '+16'],
+              ['Maiden over', '+12'],
               ['Catch', '+8'],
+              ['Stumping', '+12'],
               ['Run out', '+12'],
+              ['MOTM', '+30'],
               ['Captain bonus', '2x'],
               ['Vice-Captain bonus', '1.5x'],
             ].map(([action, pts]) => (

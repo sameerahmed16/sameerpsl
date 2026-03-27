@@ -751,24 +751,39 @@ async function computePlayerPoints(
 function calculatePoints(ps: PlayerStats): number {
   let points = 0;
 
+  // Starting XI bonus — every player in the scorecard gets +4
+  points += 4;
+
   const runs = ps.runs || 0;
   const balls = ps.balls || 1;
   const fours = ps.fours || 0;
   const sixes = ps.sixes || 0;
 
   if (runs > 0 || ps.out !== undefined) {
-    points += runs + fours + sixes * 2;
+    // Runs: +1 per run (already included via runs value)
+    points += runs;
+    // Fours: +4 bonus per boundary
+    points += fours * 4;
+    // Sixes: +6 bonus per six
+    points += sixes * 6;
+
+    // Strike rate bonuses (min 10 balls)
     const sr = (runs / Math.max(balls, 1)) * 100;
     if (balls >= 10) {
       if (sr > 170) points += 6;
-      else if (sr > 150) points += 4;
-      else if (sr > 130) points += 2;
+      else if (sr >= 150) points += 4;
+      else if (sr >= 130) points += 2;
       else if (sr < 50) points -= 6;
       else if (sr < 60) points -= 4;
+      else if (sr < 70) points -= 2;
     }
+
+    // Milestones
     if (runs >= 100) points += 16;
     else if (runs >= 50) points += 8;
-    else if (runs >= 30) points += 4;
+    else if (runs >= 25) points += 8;
+
+    // Duck
     if (runs === 0 && ps.out) points -= 2;
   }
 
@@ -777,10 +792,14 @@ function calculatePoints(ps: PlayerStats): number {
   const runsConceded = ps.runsConceded || 0;
 
   if (wickets > 0 || overs > 0) {
-    points += wickets * 25;
+    // Wickets: +30 each
+    points += wickets * 30;
+    // Wicket haul bonuses
     if (wickets >= 5) points += 16;
     else if (wickets >= 4) points += 8;
     else if (wickets >= 3) points += 4;
+
+    // Economy rate (min 2 overs)
     if (overs >= 2) {
       const economy = runsConceded / overs;
       if (economy < 5) points += 6;
@@ -790,9 +809,11 @@ function calculatePoints(ps: PlayerStats): number {
       else if (economy > 11) points -= 4;
       else if (economy > 10) points -= 2;
     }
+    // Maidens: +12
     points += (ps.maidens || 0) * 12;
   }
 
+  // Fielding
   points += (ps.catches || 0) * 8;
   points += (ps.runOuts || 0) * 12;
   points += (ps.stumpings || 0) * 12;
