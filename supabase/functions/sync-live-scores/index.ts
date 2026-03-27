@@ -273,48 +273,85 @@ async function tryCricbuzz(
   supabase?: any
 ): Promise<NormalizedScorecard | null> {
   try {
-    // Primary: scrape scorecard page via DB http extension (bypasses edge function network issues)
-    if (supabase) {
-      try {
-        console.log(`Cricbuzz: fetching scorecard for ID ${cricbuzzId} via RPC`);
-        const { data: html, error } = await supabase.rpc("http_get_text", {
-          target_url: `https://www.cricbuzz.com/live-cricket-scorecard/${cricbuzzId}`
+    if (!supabase) return null;
+    
+    // Use the mini-scorecard page which is much lighter than the full scorecard
+    console.log(`Cricbuzz: fetching mini score for ID ${cricbuzzId}`);
+    const { data: html, error } = await supabase.rpc("http_get_text", {
+      target_url: `https://www.cricbuzz.com/live-cricket-scores/${cricbuzzId}`
+    });
+    if (error) {
+      console.log(`Cricbuzz RPC error: ${error.message}`);
+      return null;
+    }
+    if (!html) {
+      console.log(`Cricbuzz: empty response`);
+      return null;
+    }
+    console.log(`Cricbuzz: got ${html.length} chars`);
+
+    // Extract scores from the page
+    let teamAScore: string | null = null;
+    let teamBScore: string | null = null;
+    const matchEnded = html.includes('"state":"Complete"') || html.includes(' won by ') || html.includes('"matchCompleted":true');
+    const players: PlayerStats[] = [];
+
+    // Look for score patterns in RSC data: "runs":N,"wickets":N,"overs":N
+    const scoreBlocks: string[] = [];
+    const scoreRegex = /"runs":(\d+),"wickets":(\d+),"overs":([\d.]+)/g;
+    let sm;
+    while ((sm = scoreRegex.exec(html)) !== null) {
+      scoreBlocks.push(`${sm[1]}/${sm[2]} (${sm[3]})`);
+    }
+    
+    if (scoreBlocks.length >= 1) teamAScore = scoreBlocks[0];
+    if (scoreBlocks.length >= 2) teamBScore = scoreBlocks[1];
+
+    // Fallback: simple score pattern
+    if (!teamAScore) {
+      const simpleRegex = /(\d{1,3})\/(\d{1,2})\s*\((\d{1,2}\.?\d?)\s*ov/g;
+      const simpleMatches = [...html.matchAll(simpleRegex)];
+      if (simpleMatches.length >= 1) teamAScore = `${simpleMatches[0][1]}/${simpleMatches[0][2]} (${simpleMatches[0][3]})`;
+      if (simpleMatches.length >= 2) teamBScore = `${simpleMatches[1][1]}/${simpleMatches[1][2]} (${simpleMatches[1][3]})`;
+    }
+
+    if (!teamAScore && !teamBScore) {
+      console.log(`Cricbuzz: no scores found in page`);
+      return null;
+    }
+
+    // Extract batsmen stats if available in RSC data
+    const batRegex = /"batName":"([^"]+)"[^}]*?"runs":(\d+)[^}]*?"balls":(\d+)[^}]*?"fours":(\d+)[^}]*?"sixes":(\d+)/g;
+    let bm;
+    while ((bm = batRegex.exec(html)) !== null) {
+      if (bm[1] && bm[1] !== "undefined") {
+        mergePlayer(players, {
+          name: bm[1],
+          runs: parseInt(bm[2]) || 0,
+          balls: parseInt(bm[3]) || 0,
+          fours: parseInt(bm[4]) || 0,
+          sixes: parseInt(bm[5]) || 0,
         });
-        if (error) {
-          console.log(`Cricbuzz RPC error: ${error.message}`);
-        } else if (html) {
-          console.log(`Cricbuzz: got ${html.length} chars HTML, parsing...`);
-          const result = parseCricbuzzRSC(html, match);
-          if (result) {
-            console.log(`Cricbuzz RSC scorecard succeeded for match ${match.id}, ${result.players.length} players, scores: ${result.teamAScore} / ${result.teamBScore}`);
-            return result;
-          } else {
-            console.log(`Cricbuzz: RSC parsing returned null`);
-          }
-        } else {
-          console.log(`Cricbuzz: RPC returned no data and no error`);
-        }
-      } catch (e) {
-        console.log(`Cricbuzz RPC exception: ${e}`);
       }
     }
 
-    // Fallback: direct fetch
-    const commentaryUrl = `https://www.cricbuzz.com/match-api/${cricbuzzId}/commentary.json`;
-    let resp = await fetchWithTimeout(commentaryUrl, 10000, { "User-Agent": BROWSER_UA });
-    
-    if (resp.ok) {
-      try {
-        const data = await resp.json();
-        const result = parseCricbuzzCommentary(data, match);
-        if (result) {
-          console.log(`Cricbuzz commentary JSON succeeded for match ${match.id}`);
-          return result;
-        }
-      } catch (_) { /* fall through */ }
+    // Extract bowler stats
+    const bowlRegex = /"bowlName":"([^"]+)"[^}]*?"overs":([\d.]+)[^}]*?"maidens":(\d+)[^}]*?"runs":(\d+)[^}]*?"wickets":(\d+)/g;
+    let bwm;
+    while ((bwm = bowlRegex.exec(html)) !== null) {
+      if (bwm[1] && bwm[1] !== "undefined") {
+        mergePlayer(players, {
+          name: bwm[1],
+          oversBowled: parseFloat(bwm[2]) || 0,
+          maidens: parseInt(bwm[3]) || 0,
+          runsConceded: parseInt(bwm[4]) || 0,
+          wickets: parseInt(bwm[5]) || 0,
+        });
+      }
     }
 
-    return null;
+    console.log(`Cricbuzz: scores ${teamAScore} / ${teamBScore}, ${players.length} players, ended=${matchEnded}`);
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz" };
   } catch (err) {
     console.log(`Cricbuzz failed for match ${match.id}:`, err);
     return null;
