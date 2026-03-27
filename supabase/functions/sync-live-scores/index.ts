@@ -68,37 +68,18 @@ Deno.serve(async (req) => {
       );
     }
 
-    // ── Auto-discover real CricAPI match IDs ──
-    if (CRICAPI_KEY) {
-      const needsDiscovery = liveMatches.filter(m =>
-        !m.external_id || isUUID(m.external_id) || (!m.cricbuzz_match_id && !m.espn_match_id)
-      );
-      if (needsDiscovery.length > 0) {
-        try {
-          const apiData = await apiFetch(
-            `${CRICAPI_BASE}/currentMatches?apikey=${encodeURIComponent(CRICAPI_KEY)}&offset=0`,
-            supabase
-          );
-          if (apiData.status === "success" && apiData.data) {
-            for (const dbMatch of needsDiscovery) {
-              const found = apiData.data.find((cm: any) => {
-                if (!cm.id || !cm.name) return false;
-                const nameLower = cm.name.toLowerCase();
-                const teamANorm = dbMatch.team_a.toLowerCase();
-                const teamBNorm = dbMatch.team_b.toLowerCase();
-                return (nameLower.includes(teamANorm) || nameLower.includes(teamBNorm)) &&
-                       (nameLower.includes(teamANorm) && nameLower.includes(teamBNorm));
-              });
-              if (found) {
-                console.log(`Auto-discovered CricAPI ID ${found.id} for match ${dbMatch.id} (${dbMatch.team_a} vs ${dbMatch.team_b})`);
-                await supabase.from("matches").update({ external_id: found.id }).eq("id", dbMatch.id);
-                dbMatch.external_id = found.id;
-              }
-            }
-          }
-        } catch (err) {
-          console.log("Auto-discovery of match IDs failed:", err);
-        }
+    // ── Auto-discover match IDs (Cricbuzz → ESPN → CricAPI) ──
+    const needsDiscovery = liveMatches.filter(m =>
+      !m.cricbuzz_match_id || !m.espn_match_id
+    );
+    if (needsDiscovery.length > 0) {
+      // Try Cricbuzz discovery
+      await discoverCricbuzzIds(supabase, needsDiscovery);
+      // Try ESPN discovery
+      await discoverESPNIds(supabase, needsDiscovery);
+      // Try CricAPI discovery as last resort
+      if (CRICAPI_KEY) {
+        await discoverCricAPIIds(supabase, CRICAPI_KEY, needsDiscovery);
       }
     }
 
@@ -111,19 +92,19 @@ Deno.serve(async (req) => {
       try {
         let scorecard: NormalizedScorecard | null = null;
 
-        // 1. CricAPI
-        if (!scorecard && CRICAPI_KEY && match.external_id) {
-          scorecard = await tryCricAPI(CRICAPI_KEY, match.external_id, match, supabase);
-        }
-
-        // 2. Cricbuzz JSON
+        // 1. Cricbuzz (free, no key, most reliable)
         if (!scorecard && match.cricbuzz_match_id) {
           scorecard = await tryCricbuzz(match.cricbuzz_match_id, match);
         }
 
-        // 3. ESPN JSON
+        // 2. ESPN Cricinfo (free, no key)
         if (!scorecard && match.espn_match_id) {
           scorecard = await tryESPN(match.espn_match_id, match);
+        }
+
+        // 3. CricAPI (paid, currently has SSL issues)
+        if (!scorecard && CRICAPI_KEY && match.external_id) {
+          scorecard = await tryCricAPI(CRICAPI_KEY, match.external_id, match, supabase);
         }
 
         if (!scorecard) {
