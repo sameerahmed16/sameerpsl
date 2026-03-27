@@ -1,54 +1,34 @@
 
 
-## Plan: Update PSL 2026 Squad Data (Trade Window + Withdrawals + Replacements)
+## Plan: Update Role Constraints & Add Winning Team Bonus
 
-### Overview
-Update `src/data/pslSquads.ts` to reflect all trade window moves, withdrawals, and replacement signings.
+### 1. Change minimum role constraints in `src/pages/MatchDetail.tsx`
 
-### Changes to `src/data/pslSquads.ts`
+Update `ROLE_CONSTRAINTS` from:
+```
+WK: [1, 4], BAT: [3, 6], AR: [1, 4], BOWL: [3, 6]
+```
+To:
+```
+WK: [1, 4], BAT: [1, 6], AR: [1, 4], BOWL: [1, 6]
+```
 
-**1. Add new players to `starPlayers` credits map:**
-- Chris Green: 7, Daniel Sams: 8, Ryan Burl: 7.5, Usman Khawaja: 9, Maheesh Theekshana: 8, Shoriful Islam: 7.5, Brian Bennett: 7, Arafat Minhas: 7, Faisal Akram: 6.5
+BAT and BOWL minimums change from 3 to 1. WK and AR already at 1.
 
-**2. Quetta Gladiators:**
-- Remove: Spencer Johnson, Ahmed Daniyal, Jahanzaib Sultan
-- Add: Alzarri Joseph (replaces Johnson), Ahmad Daniyal (traded from Multan — wait, Ahmad Daniyal moved TO Quetta), Jahanzaib Sultan (traded TO Quetta)
-- Correction: Ahmad Daniyal and Jahanzaib Sultan moved TO Quetta from Multan. So they stay/get added to Quetta, removed from Multan.
-- Remove: Spencer Johnson (pulled out)
-- Add: Alzarri Joseph (replacement) — already in Quetta squad, so no change needed there
+### 2. Add winning team bonus (+5 points) to scoring
 
-**3. Multan Sultans:**
-- Remove: Ahmad Daniyal, Jahanzaib Sultan (traded to Quetta), Saad Masood (to Rawalpindiz)
-- Add: Arafat Minhas, Faisal Akram (from Quetta), Mohammad Wasim Jr (from Islamabad), Shehzad Gul, Imran Randhawa, Mohammad Shahzad, Muhammad Ismail, Arshad Iqbal, Atizaz Habib Khan
-- Note: Mohammad Shahzad, Muhammad Ismail, Arshad Iqbal are already listed — keep them. Add missing ones.
+This requires two changes:
 
-**4. Islamabad United:**
-- Remove: Mohammad Wasim Jr (to Multan), Blessing Muzarabani (withdrew), Max Bryant (injured)
-- Add: Salman Mirza, Nisar Ahmed (from Multan), Chris Green (replaces Bryant), Mohsin Riaz (late signing)
+**a. Database migration** — Add a `winning_team` column to the `matches` table so we can track which team won.
 
-**5. Lahore Qalandars:**
-- Remove: Gudakesh Motie (withdrew), Dasun Shanaka (withdrew — not in current list, skip), Ali Shabbir (injured — not in list, skip)
-- Add: Dunith Wellalage (replaces Motie — already in squad, keep), Daniel Sams, Shahab Khan, Ryan Burl
+**b. Update `supabase/functions/sync-live-scores/index.ts`:**
+- After parsing match result, store the winning team name in `matches.winning_team`
+- In `calculatePoints`, accept a `isWinningTeam` boolean parameter
+- Add `+5` points when the player belongs to the winning team
 
-**6. Karachi Kings:**
-- Remove: Johnson Charles (not in current list — skip)
-- Add: Reeza Hendricks (already present), Haroon Arshad (already present)
-- No changes needed
+**c. Update scoring guide in `src/pages/Profile.tsx`** — Add "Winning team player: +5" to the displayed scoring list.
 
-**7. Rawalpindi Pindiz:**
-- Remove: Zaman Khan (injured), Jake Fraser-McGurk (not in list — skip), Laurie Evans (dropped)
-- Add: Saad Masood (from Multan), Jalat Khan, Cole McConchie (already present — keep), Usman Khawaja
-
-**8. Hyderabad Kingsmen:**
-- Remove: Ottneil Baartman (not in current list — skip)
-- Add: Maheesh Theekshana
-
-**9. Peshawar Zalmi:**
-- Add: Farhan Yousuf, Shoriful Islam, Tanzid Hasan Tamim (already present — keep), Brian Bennett
-
-### Summary of file changes
-- **One file**: `src/data/pslSquads.ts` — update `starPlayers` credits map + modify each team's raw player arrays (remove withdrawn/traded players, add new signings)
-
-### Also update database
-- After updating the static file, the `players` table in the database should also be updated to reflect team changes for any players already stored. This can be done by re-running the sync-players function or by manually updating via the database insert tool.
+### Technical details
+- The sync-live-scores function already parses match status; we'll extract the winning team from the API response and store it
+- The `recalcUserTeamPoints` function doesn't need changes since it reads from `match_player_points` which will already include the +5
 
