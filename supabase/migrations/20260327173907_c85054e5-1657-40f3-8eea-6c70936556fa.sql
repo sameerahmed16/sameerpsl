@@ -1,0 +1,1 @@
+UPDATE matches SET status = 'completed', winning_team = 'Quetta Gladiators' WHERE id = '6c7bb16f-4c26-430d-90ba-25b93059872a';
