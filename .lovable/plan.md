@@ -1,49 +1,47 @@
 
+## Plan: Restore the published site on the live domain
 
-## Plan: Fix Cricbuzz Scorecard Parsing — Full Player & Fielding Stats
+### What I found
+- The live URL is published and public, but it serves the default placeholder: “Your app will live here”.
+- That means the issue is not your app code crashing on the live site.
+- It strongly suggests the live frontend deployment was never updated from the placeholder build, or the custom domain is attached to that unchanged live deployment.
 
-### Problem
-The `tryCricbuzz` function only extracts data from the **miniscore** (current striker, non-striker, current bowlers, last wicket) — that's why logs show "5 players." Dismissed batsmen (like Salman Agha), bowlers who finished their spell, and all fielding stats (catches, run outs, stumpings) are missing.
+### What I will do
+1. **Verify live deployment state**
+   - Confirm the published deployment is still the placeholder build rather than your current app.
 
-### Solution
-Fetch the Cricbuzz **scorecard page** (`/live-cricket-scorecard/{id}`) in addition to the live scores page, and parse the full RSC payload which contains all batsmen, bowlers, and dismissal descriptions.
+2. **Check publish/domain setup**
+   - Confirm the live `.lovable.app` deployment and your custom domain are pointing to the same active published site.
+   - If the custom domain is attached correctly but the published build is stale, no code fix is needed.
 
-### Changes to `supabase/functions/sync-live-scores/index.ts`
+3. **Bring the frontend live**
+   - Re-publish/update the frontend so the current app replaces the placeholder on the published site.
+   - This is important because frontend changes only go live after an explicit publish/update.
 
-**1. Add scorecard page fetch inside `tryCricbuzz`**
-After extracting scores from the live page, also fetch:
+4. **Re-test both live URLs**
+   - Verify both:
+     - `sameerpsl.lovable.app`
+     - `pslfantasyleague.live`
+   - Confirm they show the real app instead of the placeholder.
+
+### Expected outcome
+- Your published domain should load the actual PSL Fantasy Hub app.
+- If the custom domain still shows the placeholder after publish, the next fix is at the domain mapping level, not in React code.
+
+### Technical note
+The screenshot and live fetch both show the default placeholder page, while your project code clearly contains a real routed app. So this looks like a **publishing/configuration issue**, not a runtime bug in `src/App.tsx`.
+
+### Likely fix path
+```text
+Current state:
+Preview/Test app -> real app
+Published site   -> placeholder
+
+Target state:
+Preview/Test app -> real app
+Published site   -> same real app
+Custom domain    -> same real app
 ```
-https://www.cricbuzz.com/live-cricket-scorecard/{cricbuzzId}
-```
-via `supabase.rpc("http_get_text", ...)` — same proxy pattern already in use.
 
-**2. Parse full batting from RSC payload**
-Extract all batsmen using the `batName`/`runs`/`balls`/`fours`/`sixes`/`outDesc` patterns already defined in `parseCricbuzzRSC` (lines 425-443). Apply these regexes to the scorecard page HTML to get ALL batsmen including dismissed ones like Salman Agha.
-
-**3. Parse full bowling from RSC payload**
-Same approach — `bowlName`/`overs`/`maidens`/`runs`/`wickets` patterns from lines 446-458 applied to scorecard HTML to get all bowlers.
-
-**4. Extract fielding stats from dismissal descriptions**
-Parse `outDesc` fields from the scorecard RSC data to credit fielders:
-- `"c PlayerName b ..."` → +1 catch for PlayerName
-- `"run out (PlayerName)"` or `"run out (PlayerName/...)"` → +1 run out for PlayerName
-- `"st PlayerName b ..."` → +1 stumping for PlayerName
-
-This is the only way to get fielding data from Cricbuzz since they don't have a separate fielding stats section.
-
-**5. Replace miniscore-only players with full scorecard players**
-If the scorecard page returns more players than the miniscore, use the scorecard data. Keep miniscore as fallback for when scorecard page isn't available yet (very early in match).
-
-### Files
-
-| Action | File | What |
-|--------|------|------|
-| Edit | `supabase/functions/sync-live-scores/index.ts` | Add scorecard page fetch, full batting/bowling/fielding extraction |
-
-### Technical Notes
-- The scorecard page uses the same RSC format as the live scores page — same regex patterns work
-- Fielding credits are extracted from dismissal text, which is standard cricket notation
-- `mergePlayer` already handles deduplication — safe to merge scorecard data on top of miniscore data
-- No database changes needed
-- After deploying, the next cron tick will pick up all players and fielding stats
-
+### Files/code
+- No app code changes are likely needed for this issue unless a later live test reveals a separate runtime problem after publishing.
