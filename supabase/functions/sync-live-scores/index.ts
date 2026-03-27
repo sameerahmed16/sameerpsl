@@ -757,7 +757,8 @@ async function tryESPNModern(
     if (!teamAScore && !teamBScore) return null;
     console.log(`ESPN modern API succeeded for match ${match.id}, found ${players.length} players`);
     const winningTeam = matchEnded ? extractWinningTeam(matchInfo?.statusText || matchInfo?.status, match.team_a, match.team_b) : null;
-    return { teamAScore, teamBScore, matchEnded, players, source: "espn", winningTeam };
+    const playerOfTheMatch = matchEnded ? (matchInfo?.playerOfTheMatch?.[0]?.player?.longName || matchInfo?.playerOfTheMatch?.[0]?.player?.name || null) : null;
+    return { teamAScore, teamBScore, matchEnded, players, source: "espn", winningTeam, playerOfTheMatch };
   } catch (err) {
     console.log(`ESPN modern API failed for match ${match.id}:`, err);
     return null;
@@ -819,7 +820,7 @@ async function tryESPNLegacy(
     if (!teamAScore && !teamBScore) return null;
     console.log(`ESPN legacy succeeded for match ${match.id}, found ${players.length} players`);
     const winningTeam = matchEnded ? extractWinningTeam(data.match?.match_status_text || data.match?.result, match.team_a, match.team_b) : null;
-    return { teamAScore, teamBScore, matchEnded, players, source: "espn", winningTeam };
+    return { teamAScore, teamBScore, matchEnded, players, source: "espn", winningTeam, playerOfTheMatch: null };
   } catch (err) {
     console.log(`ESPN legacy failed for match ${match.id}:`, err);
     return null;
