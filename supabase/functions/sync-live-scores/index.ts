@@ -756,6 +756,172 @@ async function updatePlayingXI(
   }
 }
 
+// ─── Auto-Discovery Functions ───────────────────────────────────────────────
+
+const PSL_TEAM_KEYWORDS: Record<string, string[]> = {
+  "Quetta": ["quetta", "gladiators"],
+  "Karachi": ["karachi", "kings"],
+  "Lahore": ["lahore", "qalandars"],
+  "Islamabad": ["islamabad", "united"],
+  "Peshawar": ["peshawar", "zalmi"],
+  "Multan": ["multan", "sultans"],
+  "Rawalpindi": ["rawalpindi", "raiders"],
+};
+
+function teamMatchesKeywords(teamName: string, target: string): boolean {
+  const targetLower = target.toLowerCase();
+  // Direct substring match
+  if (targetLower.includes(teamName.toLowerCase())) return true;
+  // Check PSL keywords
+  for (const [key, keywords] of Object.entries(PSL_TEAM_KEYWORDS)) {
+    if (teamName.toLowerCase().includes(key.toLowerCase())) {
+      return keywords.some(kw => targetLower.includes(kw));
+    }
+  }
+  return false;
+}
+
+async function discoverCricbuzzIds(supabase: any, matches: any[]) {
+  const needsCricbuzz = matches.filter(m => !m.cricbuzz_match_id);
+  if (!needsCricbuzz.length) return;
+
+  try {
+    // Cricbuzz live matches API
+    const resp = await fetchWithTimeout(
+      "https://www.cricbuzz.com/api/matches/live",
+      10000,
+      { "User-Agent": BROWSER_UA, "Accept": "application/json" }
+    );
+    if (!resp.ok) {
+      console.log(`Cricbuzz discovery: HTTP ${resp.status}`);
+      // Fallback: try via DB http extension
+      const { data, error } = await supabase.rpc("http_get_json", {
+        target_url: "https://www.cricbuzz.com/api/matches/live"
+      });
+      if (error || !data) {
+        console.log("Cricbuzz discovery via RPC also failed:", error?.message);
+        return;
+      }
+      await matchCricbuzzData(supabase, data, needsCricbuzz);
+      return;
+    }
+    const data = await resp.json();
+    await matchCricbuzzData(supabase, data, needsCricbuzz);
+  } catch (err) {
+    console.log("Cricbuzz discovery failed:", err);
+  }
+}
+
+async function matchCricbuzzData(supabase: any, data: any, matches: any[]) {
+  // Cricbuzz returns { typeMatches: [{ matchType, seriesMatches: [{ seriesAdWrapper: { matches: [...] } }] }] }
+  const allCBMatches: any[] = [];
+  const typeMatches = data.typeMatches || data.matchType || [];
+  for (const tm of typeMatches) {
+    for (const sm of tm.seriesMatches || []) {
+      const wrapper = sm.seriesAdWrapper || sm;
+      for (const m of wrapper.matches || []) {
+        const matchInfo = m.matchInfo || m;
+        allCBMatches.push(matchInfo);
+      }
+    }
+  }
+
+  for (const dbMatch of matches) {
+    const found = allCBMatches.find((cb: any) => {
+      const team1 = cb.team1?.teamName || cb.team1?.teamSName || "";
+      const team2 = cb.team2?.teamName || cb.team2?.teamSName || "";
+      return (teamMatchesKeywords(dbMatch.team_a, team1) && teamMatchesKeywords(dbMatch.team_b, team2)) ||
+             (teamMatchesKeywords(dbMatch.team_a, team2) && teamMatchesKeywords(dbMatch.team_b, team1));
+    });
+    if (found) {
+      const cbId = String(found.matchId || found.id);
+      console.log(`Cricbuzz: discovered ID ${cbId} for ${dbMatch.team_a} vs ${dbMatch.team_b}`);
+      await supabase.from("matches").update({ cricbuzz_match_id: cbId }).eq("id", dbMatch.id);
+      dbMatch.cricbuzz_match_id = cbId;
+    }
+  }
+}
+
+async function discoverESPNIds(supabase: any, matches: any[]) {
+  const needsESPN = matches.filter(m => !m.espn_match_id);
+  if (!needsESPN.length) return;
+
+  try {
+    const url = "https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en";
+    let data: any;
+
+    try {
+      const resp = await fetchWithTimeout(url, 10000, {
+        "User-Agent": BROWSER_UA,
+        "Accept": "application/json"
+      });
+      if (resp.ok) {
+        data = await resp.json();
+      }
+    } catch (_) {
+      console.log("ESPN discovery direct fetch failed, trying RPC");
+    }
+
+    if (!data) {
+      const { data: rpcData, error } = await supabase.rpc("http_get_json", { target_url: url });
+      if (error || !rpcData) {
+        console.log("ESPN discovery via RPC also failed:", error?.message);
+        return;
+      }
+      data = rpcData;
+    }
+
+    const espnMatches = data.matches || data.content?.matches || [];
+    for (const dbMatch of needsESPN) {
+      const found = espnMatches.find((em: any) => {
+        const match = em.match || em;
+        const teams = match.teams || [];
+        const team1 = teams[0]?.team?.longName || teams[0]?.team?.name || teams[0]?.team?.abbreviation || "";
+        const team2 = teams[1]?.team?.longName || teams[1]?.team?.name || teams[1]?.team?.abbreviation || "";
+        return (teamMatchesKeywords(dbMatch.team_a, team1) && teamMatchesKeywords(dbMatch.team_b, team2)) ||
+               (teamMatchesKeywords(dbMatch.team_a, team2) && teamMatchesKeywords(dbMatch.team_b, team1));
+      });
+      if (found) {
+        const espnId = String((found.match || found).objectId || (found.match || found).id || (found.match || found).slug);
+        console.log(`ESPN: discovered ID ${espnId} for ${dbMatch.team_a} vs ${dbMatch.team_b}`);
+        await supabase.from("matches").update({ espn_match_id: espnId }).eq("id", dbMatch.id);
+        dbMatch.espn_match_id = espnId;
+      }
+    }
+  } catch (err) {
+    console.log("ESPN discovery failed:", err);
+  }
+}
+
+async function discoverCricAPIIds(supabase: any, apiKey: string, matches: any[]) {
+  const needsCricAPI = matches.filter(m => !m.external_id || isUUID(m.external_id));
+  if (!needsCricAPI.length) return;
+
+  try {
+    const apiData = await apiFetch(
+      `${CRICAPI_BASE}/currentMatches?apikey=${encodeURIComponent(apiKey)}&offset=0`,
+      supabase
+    );
+    if (apiData.status !== "success" || !apiData.data) return;
+
+    for (const dbMatch of needsCricAPI) {
+      const found = apiData.data.find((cm: any) => {
+        if (!cm.id || !cm.name) return false;
+        const nameLower = cm.name.toLowerCase();
+        return nameLower.includes(dbMatch.team_a.toLowerCase()) &&
+               nameLower.includes(dbMatch.team_b.toLowerCase());
+      });
+      if (found) {
+        console.log(`CricAPI: discovered ID ${found.id} for ${dbMatch.team_a} vs ${dbMatch.team_b}`);
+        await supabase.from("matches").update({ external_id: found.id }).eq("id", dbMatch.id);
+        dbMatch.external_id = found.id;
+      }
+    }
+  } catch (err) {
+    console.log("CricAPI discovery failed:", err);
+  }
+}
+
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
 function isUUID(str: string): boolean {
