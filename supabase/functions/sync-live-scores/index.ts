@@ -264,7 +264,8 @@ async function tryCricAPI(
     }
 
     console.log(`CricAPI succeeded for match ${match.id}`);
-    return { teamAScore, teamBScore, matchEnded: !!m.matchEnded, players, source: "cricapi" };
+    const winningTeam = m.matchEnded ? extractWinningTeam(m.status, match.team_a, match.team_b) : null;
+    return { teamAScore, teamBScore, matchEnded: !!m.matchEnded, players, source: "cricapi", winningTeam };
   } catch (err) {
     console.log(`CricAPI failed for match ${match.id}:`, err);
     return null;
