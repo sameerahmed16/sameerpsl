@@ -1,27 +1,28 @@
 
 
-## Plan: Extract Team Logos from Collage
+## Plan: Zoom & Center Team Logos to Remove Crop Borders
 
-### What
-Crop 8 individual team logos from the uploaded collage image and replace the current logo files used in `TeamLogo.tsx`.
+### Problem
+The logos cropped from the collage include visible borders/background from adjacent cells. The actual logo artwork sits in the center of each crop, surrounded by colored background.
+
+### Solution
+Re-run the cropping script with **inset margins** — crop a smaller region from the center of each cell to exclude the border areas. This zooms into the actual logo content.
 
 ### How
 
-1. **Copy the collage** to `/tmp/` for processing
-2. **Run a Python script** to crop each team logo from its grid position:
-   - Top row: Islamabad United (left), Lahore Qalandars (right)
-   - Middle row: Karachi Kings (left), Peshawar Zalmi (right)
-   - Third row: Quetta Gladiators (left), Multan Sultans (right)
-   - Bottom row: Rawalpindi Pindiz (left), Hyderabad Kingsmen (right)
-3. **Save cropped logos** to `src/assets/logos/` with the existing filenames so `TeamLogo.tsx` imports work without changes
-4. **QA** each extracted logo visually to ensure clean crops
+1. **Re-crop with ~15-20% inset** on each side of each cell
+   - Original cell size: ~356x222px
+   - New crop: trim ~55px from left/right and ~35px from top/bottom per cell
+   - This focuses on the central logo artwork and removes the colored border strips
+
+2. **Save to same filenames** in `src/assets/logos/` so `TeamLogo.tsx` continues to work without changes
+
+3. **QA each logo** visually to confirm clean crops with no border artifacts
 
 ### Files
 
 | Action | File | What |
 |--------|------|------|
-| Script | `/tmp/crop_logos.py` | PIL-based cropping of 8 logos from collage |
-| Replace | `src/assets/logos/*.png` | 8 individual team logo files |
-
-No code changes needed — `TeamLogo.tsx` already imports from these paths.
+| Script | `/tmp/crop_logos_v2.py` | Re-crop with inset margins |
+| Replace | `src/assets/logos/*.png` | 8 updated logo files |
 
