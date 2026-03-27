@@ -268,7 +268,8 @@ async function tryCricAPI(
 
     console.log(`CricAPI succeeded for match ${match.id}`);
     const winningTeam = m.matchEnded ? extractWinningTeam(m.status, match.team_a, match.team_b) : null;
-    return { teamAScore, teamBScore, matchEnded: !!m.matchEnded, players, source: "cricapi", winningTeam };
+    const playerOfTheMatch = m.matchEnded ? (m.playerOfTheMatch?.name || null) : null;
+    return { teamAScore, teamBScore, matchEnded: !!m.matchEnded, players, source: "cricapi", winningTeam, playerOfTheMatch };
   } catch (err) {
     console.log(`CricAPI failed for match ${match.id}:`, err);
     return null;
@@ -583,7 +584,7 @@ function parseCricbuzzRSC(html: string, match: any): NormalizedScorecard | null 
       });
     }
 
-    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam: null };
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam: null, playerOfTheMatch: null };
   } catch (_) {
     return null;
   }
@@ -648,7 +649,7 @@ function parseCricbuzzCommentary(data: any, match: any): NormalizedScorecard | n
     }
 
     const winningTeam = matchEnded ? extractWinningTeam(matchHeader.status, match.team_a, match.team_b) : null;
-    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam };
+    return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam, playerOfTheMatch: null };
   } catch (_) {
     return null;
   }
@@ -681,7 +682,7 @@ function parseCricbuzzHTML(html: string, match: any): NormalizedScorecard | null
     }
   }
 
-  return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam: null };
+  return { teamAScore, teamBScore, matchEnded, players, source: "cricbuzz", winningTeam: null, playerOfTheMatch: null };
 }
 
 // ─── Source 3: ESPN Cricinfo (Modern API) ──────────────────────────────────
