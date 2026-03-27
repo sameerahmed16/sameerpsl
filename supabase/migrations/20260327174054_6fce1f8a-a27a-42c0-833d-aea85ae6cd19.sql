@@ -1,0 +1,1 @@
+UPDATE matches SET winning_team = 'Karachi Kings', team_a_score = '167/7 (19.6)', team_b_score = '181/7 (19.6)' WHERE id = '6c7bb16f-4c26-430d-90ba-25b93059872a';
