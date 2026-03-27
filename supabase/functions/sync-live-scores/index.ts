@@ -872,6 +872,15 @@ async function computePlayerPoints(
       }
     }
 
+    // +30 bonus for Player of the Match
+    if (scorecard.playerOfTheMatch) {
+      const motmNorm = normalizeName(scorecard.playerOfTheMatch);
+      if (normalizedPs === motmNorm || normalizedPs.includes(motmNorm) || motmNorm.includes(normalizedPs)) {
+        points += 30;
+        console.log(`MOTM bonus +30 applied to ${ps.name}`);
+      }
+    }
+
     await supabase.from("match_player_points").upsert(
       { match_id: matchId, player_id: dbPlayer.id, points, data_source: scorecard.source },
       { onConflict: "match_id,player_id" }
