@@ -848,7 +848,16 @@ async function computePlayerPoints(
 
     if (!dbPlayer) continue;
 
-    const points = calculatePoints(ps);
+    let points = calculatePoints(ps);
+
+    // +5 bonus for winning team players
+    if (scorecard.winningTeam && dbPlayer.team) {
+      const playerTeam = dbPlayer.team.toLowerCase();
+      const winTeam = scorecard.winningTeam.toLowerCase();
+      if (playerTeam === winTeam || playerTeam.includes(winTeam) || winTeam.includes(playerTeam)) {
+        points += 5;
+      }
+    }
 
     await supabase.from("match_player_points").upsert(
       { match_id: matchId, player_id: dbPlayer.id, points, data_source: scorecard.source },
