@@ -32,7 +32,7 @@ interface PlayerPointRow {
 }
 
 export default function AdminScores() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [selectedMatch, setSelectedMatch] = useState<string>('');
   const [teamAScore, setTeamAScore] = useState('');
@@ -165,6 +165,16 @@ export default function AdminScores() {
     } finally {
       setSyncing(false);
     }
+  }
+
+  if (loading) {
+    return (
+      <Layout>
+        <div className="min-h-screen flex items-center justify-center">
+          <RefreshCw className="w-8 h-8 text-primary animate-spin" />
+        </div>
+      </Layout>
+    );
   }
 
   if (!isAdmin) {
