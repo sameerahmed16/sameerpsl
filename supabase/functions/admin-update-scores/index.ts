@@ -295,8 +295,10 @@ interface PlayerStats {
   runsConceded?: number;
   maidens?: number;
   catches?: number;
-  runOuts?: number;
+  directRunOuts?: number;
+  indirectRunOuts?: number;
   stumpings?: number;
+  runOuts?: number;
 }
 
 function parseScorecardPlayers(html: string): PlayerStats[] {
@@ -346,27 +348,39 @@ function parseScorecardPlayers(html: string): PlayerStats[] {
 }
 
 function extractFieldingFromOutDesc(players: PlayerStats[], outDesc: string) {
-  const catchMatch = outDesc.match(/^c\s+(.+?)\s+b\s+/);
-  if (catchMatch) {
-    const fielder = catchMatch[1].trim();
-    if (fielder !== "&" && fielder.length > 1) {
-      mergePlayer(players, { name: fielder, catches: 1 });
-    }
-  }
-  const cAndBMatch = outDesc.match(/^c & b\s+(.+)/);
+  const cleaned = outDesc.replace(/†/g, '').trim();
+
+  const cAndBMatch = cleaned.match(/^c\s*&\s*b\s+(.+)/);
   if (cAndBMatch) {
     const bowler = cAndBMatch[1].trim();
     if (bowler.length > 1) mergePlayer(players, { name: bowler, catches: 1 });
+    return;
   }
-  const stumpMatch = outDesc.match(/^st\s+(.+?)\s+b\s+/);
+
+  const catchMatch = cleaned.match(/^c\s+(.+?)\s+b\s+/);
+  if (catchMatch) {
+    const fielder = catchMatch[1].trim();
+    if (fielder !== "&" && fielder.length > 1) mergePlayer(players, { name: fielder, catches: 1 });
+  }
+
+  const stumpMatch = cleaned.match(/^st\s+(.+?)\s+b\s+/);
   if (stumpMatch) {
     const keeper = stumpMatch[1].trim();
     if (keeper.length > 1) mergePlayer(players, { name: keeper, stumpings: 1 });
   }
-  const runOutMatch = outDesc.match(/run out\s*\(([^)]+)\)/);
+
+  const runOutMatch = cleaned.match(/run out\s*\(([^)]+)\)/);
   if (runOutMatch) {
     const fielders = runOutMatch[1].trim().split('/').map(f => f.trim()).filter(f => f.length > 1);
-    for (const f of fielders) mergePlayer(players, { name: f, runOuts: 1 });
+    if (fielders.length === 1) {
+      mergePlayer(players, { name: fielders[0], directRunOuts: 1 });
+    } else if (fielders.length >= 2) {
+      const lastIdx = fielders.length - 1;
+      mergePlayer(players, { name: fielders[lastIdx], directRunOuts: 1 });
+      for (let i = 0; i < lastIdx; i++) {
+        mergePlayer(players, { name: fielders[i], indirectRunOuts: 1 });
+      }
+    }
   }
 }
 
@@ -399,11 +413,23 @@ function extractWinningTeam(statusText: string | undefined | null, teamA: string
   return null;
 }
 
-// ─── Points Calculation (same as sync-live-scores) ─────────────────────────
+interface PointsBreakdown {
+  starting_xi: number;
+  batting: number;
+  bowling: number;
+  fielding: number;
+  sr_bonus: number;
+  er_bonus: number;
+  milestone: number;
+  total: number;
+}
 
 function calculatePoints(ps: PlayerStats): number {
-  let points = 0;
-  points += 4; // Starting XI
+  return calculatePointsWithBreakdown(ps).total;
+}
+
+function calculatePointsWithBreakdown(ps: PlayerStats): PointsBreakdown {
+  const bd: PointsBreakdown = { starting_xi: 4, batting: 0, bowling: 0, fielding: 0, sr_bonus: 0, er_bonus: 0, milestone: 0, total: 0 };
 
   const runs = ps.runs || 0;
   const balls = ps.balls || 1;
@@ -411,25 +437,20 @@ function calculatePoints(ps: PlayerStats): number {
   const sixes = ps.sixes || 0;
 
   if (runs > 0 || ps.out !== undefined) {
-    points += runs;
-    points += fours * 4;
-    points += sixes * 6;
-
+    bd.batting += runs + fours * 4 + sixes * 6;
     const sr = (runs / Math.max(balls, 1)) * 100;
     if (balls >= 10) {
-      if (sr > 170) points += 6;
-      else if (sr >= 150) points += 4;
-      else if (sr >= 130) points += 2;
-      else if (sr < 50) points -= 6;
-      else if (sr < 60) points -= 4;
-      else if (sr < 70) points -= 2;
+      if (sr > 170) bd.sr_bonus += 6;
+      else if (sr >= 150) bd.sr_bonus += 4;
+      else if (sr >= 130) bd.sr_bonus += 2;
+      else if (sr < 50) bd.sr_bonus -= 6;
+      else if (sr < 60) bd.sr_bonus -= 4;
+      else if (sr < 70) bd.sr_bonus -= 2;
     }
-
-    if (runs >= 100) points += 16;
-    else if (runs >= 50) points += 8;
-    else if (runs >= 25) points += 8;
-
-    if (runs === 0 && ps.out) points -= 2;
+    if (runs >= 100) bd.milestone += 16;
+    else if (runs >= 50) bd.milestone += 8;
+    else if (runs >= 25) bd.milestone += 8;
+    if (runs === 0 && ps.out) bd.batting -= 2;
   }
 
   const wickets = ps.wickets || 0;
@@ -437,28 +458,30 @@ function calculatePoints(ps: PlayerStats): number {
   const runsConceded = ps.runsConceded || 0;
 
   if (wickets > 0 || overs > 0) {
-    points += wickets * 30;
-    if (wickets >= 5) points += 16;
-    else if (wickets >= 4) points += 8;
-    else if (wickets >= 3) points += 4;
-
+    bd.bowling += wickets * 30;
+    if (wickets >= 5) bd.milestone += 16;
+    else if (wickets >= 4) bd.milestone += 8;
+    else if (wickets >= 3) bd.milestone += 4;
     if (overs >= 2) {
       const economy = runsConceded / overs;
-      if (economy < 5) points += 6;
-      else if (economy < 6) points += 4;
-      else if (economy < 7) points += 2;
-      else if (economy > 12) points -= 6;
-      else if (economy > 11) points -= 4;
-      else if (economy > 10) points -= 2;
+      if (economy < 5) bd.er_bonus += 6;
+      else if (economy < 6) bd.er_bonus += 4;
+      else if (economy < 7) bd.er_bonus += 2;
+      else if (economy > 12) bd.er_bonus -= 6;
+      else if (economy > 11) bd.er_bonus -= 4;
+      else if (economy > 10) bd.er_bonus -= 2;
     }
-    points += (ps.maidens || 0) * 12;
+    bd.bowling += (ps.maidens || 0) * 12;
   }
 
-  points += (ps.catches || 0) * 8;
-  points += (ps.runOuts || 0) * 12;
-  points += (ps.stumpings || 0) * 12;
+  bd.fielding += (ps.catches || 0) * 8;
+  bd.fielding += (ps.directRunOuts || 0) * 12;
+  bd.fielding += (ps.indirectRunOuts || 0) * 6;
+  bd.fielding += (ps.runOuts || 0) * 12;
+  bd.fielding += (ps.stumpings || 0) * 12;
 
-  return points;
+  bd.total = bd.starting_xi + bd.batting + bd.bowling + bd.fielding + bd.sr_bonus + bd.er_bonus + bd.milestone;
+  return bd;
 }
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
