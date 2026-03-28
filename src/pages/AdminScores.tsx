@@ -42,6 +42,7 @@ export default function AdminScores() {
   const [espnId, setEspnId] = useState('');
   const [playerPoints, setPlayerPoints] = useState<PlayerPointRow[]>([]);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const isAdmin = user?.email && ADMIN_EMAILS.includes(user.email);
 
@@ -131,6 +132,21 @@ export default function AdminScores() {
     setPlayerPoints(prev =>
       prev.map(p => (p.player_id === playerId ? { ...p, points } : p))
     );
+  }
+
+  async function retrySyncLiveScores() {
+    setSyncing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('sync-live-scores');
+      if (error) throw error;
+      toast.success(`Sync complete: ${JSON.stringify(data)}`);
+      loadMatches();
+      if (selectedMatch) loadMatchDetails();
+    } catch (err: any) {
+      toast.error(err.message || 'Sync failed');
+    } finally {
+      setSyncing(false);
+    }
   }
 
   if (!isAdmin) {
