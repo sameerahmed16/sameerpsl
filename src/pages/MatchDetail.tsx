@@ -298,6 +298,29 @@ const MatchDetail = () => {
     setUsingFallback(dbPlayers.length === 0 && allPlayers.length > 0);
   }, [dbPlayers.length, allPlayers.length]);
 
+  // Fetch match-specific player points for live/completed matches
+  const { data: matchPlayerPoints = [] } = useQuery({
+    queryKey: ['match-player-points', id],
+    enabled: !!id && (match?.status === 'live' || match?.status === 'completed'),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('match_player_points')
+        .select('player_id, points, breakdown')
+        .eq('match_id', id!);
+      if (error) throw error;
+      return data || [];
+    },
+    refetchInterval: match?.status === 'live' ? 10000 : undefined,
+  });
+
+  const matchPointsMap = useMemo(() => {
+    const m = new Map<string, { points: number; breakdown: any }>();
+    for (const mp of matchPlayerPoints) {
+      m.set(mp.player_id, { points: mp.points, breakdown: mp.breakdown });
+    }
+    return m;
+  }, [matchPlayerPoints]);
+
   const { data: existingTeam } = useQuery({
     queryKey: ['user-team', id],
     enabled: !!user,
@@ -545,7 +568,7 @@ const MatchDetail = () => {
             </TabsList>
 
             <TabsContent value="my-team">
-              <LiveMyTeam players={selectedPlayers} captainId={captain} viceCaptainId={viceCaptain} />
+              <LiveMyTeam players={selectedPlayers} captainId={captain} viceCaptainId={viceCaptain} matchPoints={matchPointsMap} />
               <Button
                 onClick={() => setShowPreview(true)}
                 variant="outline"
