@@ -143,26 +143,28 @@ const Leaderboard = () => {
         .eq('user_team_id', expandedEntry!);
       if (error) throw error;
 
-      let pointsMap = new Map<string, number>();
+      let pointsMap = new Map<string, { points: number; breakdown: any }>();
       if (selectedMatch && selectedMatchStatus !== 'upcoming') {
         const playerIds = (tp || []).map(t => t.player_id);
         const { data: mpp } = await supabase
           .from('match_player_points')
-          .select('player_id, points')
+          .select('player_id, points, breakdown')
           .eq('match_id', selectedMatch)
           .in('player_id', playerIds);
-        pointsMap = new Map((mpp || []).map(p => [p.player_id, p.points]));
+        pointsMap = new Map((mpp || []).map(p => [p.player_id, { points: p.points, breakdown: p.breakdown }]));
       }
 
       return (tp || []).map(t => {
         const p = t.players as any;
+        const mpData = pointsMap.get(t.player_id);
         return {
           player_id: t.player_id,
           name: p?.name || 'Unknown',
           role: p?.role || 'BAT',
           team: p?.team || '',
           credits: p?.credits || 0,
-          points: pointsMap.get(t.player_id),
+          points: mpData?.points,
+          breakdown: mpData?.breakdown,
         } as SquadPlayer;
       });
     },
