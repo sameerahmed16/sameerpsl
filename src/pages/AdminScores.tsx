@@ -32,7 +32,7 @@ interface PlayerPointRow {
 }
 
 export default function AdminScores() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [selectedMatch, setSelectedMatch] = useState<string>('');
   const [teamAScore, setTeamAScore] = useState('');
