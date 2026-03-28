@@ -149,6 +149,24 @@ export default function AdminScores() {
     }
   }
 
+  async function recalculatePoints(matchId: string) {
+    setSyncing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('admin-update-scores', {
+        body: { match_id: matchId, recalculate: true },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast.success(`Recalculated! ${data.playersMatched} players, winner: ${data.winningTeam || 'unknown'}, win bonus: ${data.winBonusApplied}, MOTM: ${data.playerOfTheMatch || 'none'}`);
+      loadMatches();
+      if (selectedMatch === matchId) loadMatchDetails();
+    } catch (err: any) {
+      toast.error(err.message || 'Recalculation failed');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   if (!isAdmin) {
     return (
       <Layout>
@@ -260,7 +278,7 @@ export default function AdminScores() {
               </Card>
             )}
 
-            <div className="flex gap-3">
+            <div className="flex gap-3 flex-wrap">
               <Button onClick={saveMatchScores} disabled={saving} className="bg-primary text-primary-foreground hover:bg-primary/90">
                 {saving ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
                 {saving ? 'Saving...' : 'Save & Recalculate Points'}
@@ -269,6 +287,12 @@ export default function AdminScores() {
                 {syncing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                 {syncing ? 'Syncing...' : 'Retry Live Sync'}
               </Button>
+              {selectedMatchData?.cricbuzz_match_id && (
+                <Button variant="secondary" onClick={() => recalculatePoints(selectedMatch)} disabled={syncing}>
+                  {syncing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  {syncing ? 'Recalculating...' : 'Recalculate from Cricbuzz'}
+                </Button>
+              )}
             </div>
           </>
         )}

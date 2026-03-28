@@ -45,14 +45,28 @@ function extractWinningTeam(statusText: string | undefined | null, teamA: string
   if (s.includes("won") || s.includes("beat")) {
     const tA = teamA.toLowerCase();
     const tB = teamB.toLowerCase();
-    // Check which team name appears before "won" or is mentioned as winner
+    // Check full team name
     if (s.includes(tA) && (s.indexOf(tA) < s.indexOf("won") || s.indexOf(tA) < s.indexOf("beat"))) return teamA;
     if (s.includes(tB) && (s.indexOf(tB) < s.indexOf("won") || s.indexOf(tB) < s.indexOf("beat"))) return teamB;
-    // Fallback: check short names (first word)
-    const shortA = tA.split(" ")[0];
-    const shortB = tB.split(" ")[0];
-    if (s.includes(shortA) && s.indexOf(shortA) < Math.max(s.indexOf("won"), s.indexOf("beat"))) return teamA;
-    if (s.includes(shortB) && s.indexOf(shortB) < Math.max(s.indexOf("won"), s.indexOf("beat"))) return teamB;
+    // Fallback: check each word of team name (handles "Islamabad" matching "Islamabad United")
+    const wordsA = tA.split(/\s+/);
+    const wordsB = tB.split(/\s+/);
+    const winIdx = Math.max(s.indexOf("won"), s.indexOf("beat"));
+    for (const word of wordsA) {
+      if (word.length >= 4 && s.includes(word) && s.indexOf(word) < winIdx) return teamA;
+    }
+    for (const word of wordsB) {
+      if (word.length >= 4 && s.includes(word) && s.indexOf(word) < winIdx) return teamB;
+    }
+    // Also check PSL team keywords
+    for (const [key, keywords] of Object.entries(PSL_TEAM_KEYWORDS)) {
+      if (tA.includes(key.toLowerCase())) {
+        if (keywords.some(kw => s.includes(kw) && s.indexOf(kw) < winIdx)) return teamA;
+      }
+      if (tB.includes(key.toLowerCase())) {
+        if (keywords.some(kw => s.includes(kw) && s.indexOf(kw) < winIdx)) return teamB;
+      }
+    }
   }
   return null;
 }
