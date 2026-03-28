@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Shield, Save, RefreshCw } from 'lucide-react';
 
-const ADMIN_EMAILS = ['admin@psl.com', 'sameer@psl.com'];
+const ADMIN_EMAILS = ['admin@psl.com', 'sameer@psl.com', 'samspamspamsam16@gmail.com'];
 
 interface MatchRow {
   id: string;
