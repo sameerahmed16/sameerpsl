@@ -42,6 +42,7 @@ export default function AdminScores() {
   const [espnId, setEspnId] = useState('');
   const [playerPoints, setPlayerPoints] = useState<PlayerPointRow[]>([]);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const isAdmin = user?.email && ADMIN_EMAILS.includes(user.email);
 
@@ -131,6 +132,21 @@ export default function AdminScores() {
     setPlayerPoints(prev =>
       prev.map(p => (p.player_id === playerId ? { ...p, points } : p))
     );
+  }
+
+  async function retrySyncLiveScores() {
+    setSyncing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('sync-live-scores');
+      if (error) throw error;
+      toast.success(`Sync complete: ${JSON.stringify(data)}`);
+      loadMatches();
+      if (selectedMatch) loadMatchDetails();
+    } catch (err: any) {
+      toast.error(err.message || 'Sync failed');
+    } finally {
+      setSyncing(false);
+    }
   }
 
   if (!isAdmin) {
@@ -248,6 +264,10 @@ export default function AdminScores() {
               <Button onClick={saveMatchScores} disabled={saving} className="bg-primary text-primary-foreground hover:bg-primary/90">
                 {saving ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
                 {saving ? 'Saving...' : 'Save & Recalculate Points'}
+              </Button>
+              <Button variant="outline" onClick={retrySyncLiveScores} disabled={syncing}>
+                {syncing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                {syncing ? 'Syncing...' : 'Retry Live Sync'}
               </Button>
             </div>
           </>

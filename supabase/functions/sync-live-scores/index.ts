@@ -1088,13 +1088,14 @@ async function updatePlayingXI(
 // ─── Auto-Discovery Functions ───────────────────────────────────────────────
 
 const PSL_TEAM_KEYWORDS: Record<string, string[]> = {
-  "Quetta": ["quetta", "gladiators"],
-  "Karachi": ["karachi", "kings"],
-  "Lahore": ["lahore", "qalandars"],
-  "Islamabad": ["islamabad", "united"],
-  "Peshawar": ["peshawar", "zalmi"],
-  "Multan": ["multan", "sultans"],
-  "Rawalpindi": ["rawalpindi", "raiders"],
+  "Quetta": ["quetta", "gladiators", "qtg"],
+  "Karachi": ["karachi", "kings", "krk"],
+  "Lahore": ["lahore", "qalandars", "lhq"],
+  "Islamabad": ["islamabad", "united", "isu"],
+  "Peshawar": ["peshawar", "zalmi", "psz"],
+  "Multan": ["multan", "sultans", "ms"],
+  "Rawalpindi": ["rawalpindi", "raiders", "pindiz", "rwp"],
+  "Hyderabad": ["hyderabad", "kingsmen", "hydk"],
 };
 
 function teamMatchesKeywords(teamName: string, target: string): boolean {
