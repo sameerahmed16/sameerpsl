@@ -1,50 +1,54 @@
 
+Fix the scoring issue in two parts: correct the backend calculation/audit path, then update the UI so Captain/Vice-Captain differences are actually visible.
 
-## Fix: Missing winning team bonus (+5) and verify C/VC multipliers for completed matches
+1. What I found
+- The backend already recalculates team totals with multipliers: `recalcUserTeamPoints()` applies `2x` for captain and `1.5x` for vice-captain when writing `user_teams.total_points`.
+- The mismatch is mainly in the UI: both `Leaderboard.tsx` expanded squads and the completed/live player lists display only base `match_player_points.points`, so C/VC players look the same as normal players.
+- Fielding points are fragile because they are inferred from Cricbuzz dismissal text. The parsing is narrow, and the recalculation function has a simplified fielding parser, so catches/stumpings/run-outs can be missed or inconsistently applied.
+- There is also no stored point breakdown, so it is hard to verify whether a player’s total came from batting, bowling, fielding, winning bonus, or MOTM.
 
-### Problem identified
-Both completed matches have `winning_team = null` in the database, which means:
-- **+5 winning team bonus** was never applied to any player
-- **MOTM +30 bonus** was likely not extracted either
-- This affects all 42 player point totals and cascades to all 32 user team totals and profile leaderboard points
+2. Implementation plan
+- Unify scoring logic so both live sync and admin recalculation use the same parser and the same point-calculation rules.
+- Strengthen Cricbuzz fielding extraction:
+  - catches
+  - caught-and-bowled
+  - stumpings
+  - direct run-outs
+  - multi-fielder run-outs
+- Fix run-out scoring to match the intended rules instead of treating every involved fielder the same.
+- Recalculate the two recently completed matches from Cricbuzz after the parser/scoring fix so stored points, user team totals, and leaderboard totals are refreshed.
+- Update the UI to clearly show:
+  - base player points
+  - C or VC label
+  - multiplied total for that user’s team where relevant
+- Add a simple per-player breakdown display for completed matches so fielding and bonus points are visible instead of hidden inside one total.
 
-The C/VC multiplier logic (2x captain, 1.5x vice-captain) in `recalcUserTeamPoints` is correct and already applied — the issue is the base player points are wrong.
+3. Files to update
+- `supabase/functions/sync-live-scores/index.ts`
+  - centralize/fix dismissal parsing
+  - fix fielding/run-out scoring
+  - keep winner/MOTM bonuses consistent
+- `supabase/functions/admin-update-scores/index.ts`
+  - reuse the same parsing/scoring path as live sync
+  - make recalculation return audit-friendly details
+- `src/pages/MatchDetail.tsx`
+  - show base vs multiplied points in “My Team”
+  - show clearer scoring detail for completed matches
+- `src/pages/Leaderboard.tsx`
+  - show captain/vice-captain adjusted points in expanded squads, not only raw base points
 
-### Match winners (from scores)
-- **Peshawar Zalmi 214/4 vs Rawalpindi Pindiz 218/5** → **Rawalpindi Pindiz won** (chased 215, 11 players need +5)
-- **Multan Sultans 171/8 vs Islamabad United 175/5** → **Islamabad United won** (chased 172, 10 players need +5)
+4. Optional backend improvement I recommend
+- Add a nullable JSON breakdown column on `match_player_points` so each recalculation can store components like:
+  - batting
+  - bowling
+  - fielding
+  - winning_bonus
+  - motm_bonus
+  - total
+This will make future disputes easy to verify and fix.
 
-### Plan
-
-**1. Fix winning team extraction in sync-live-scores**
-The `extractWinningTeam()` function fails when the Cricbuzz status text uses short team names (e.g. "Islamabad" instead of "Islamabad United"). Add fallback matching on first-word team names and partial matches.
-
-**2. Add a "Recalculate Points" admin action for completed matches**
-Currently the sync only processes `live` matches. Add a new edge function endpoint or modify `admin-update-scores` to accept a `recalculate: true` flag that:
-- Re-fetches the scorecard from Cricbuzz for a completed match
-- Recomputes all player points with correct winning team (+5) and MOTM (+30) bonuses
-- Recalculates all user team totals with C/VC multipliers
-- Updates profile leaderboard totals
-
-**3. Set winning_team and recalculate for both matches**
-- Update `matches` table: set `winning_team` for both completed matches
-- Re-invoke the recalculation to add +5 to all winning team players
-- Recalculate all 32 user_teams with corrected base points × C/VC multipliers
-- Update all affected profile `total_points`
-
-**4. Add "Recalculate" button to AdminScores UI**
-Add a button next to each completed match that triggers the recalculation endpoint, so you can fix points without changing match status.
-
-### Technical details
-
-**Files to modify:**
-- `supabase/functions/sync-live-scores/index.ts` — fix `extractWinningTeam()` to handle partial team name matches
-- `supabase/functions/admin-update-scores/index.ts` — add `recalculate: true` mode that re-fetches scorecard and recomputes points
-- `src/pages/AdminScores.tsx` — add "Recalculate" button per match
-
-**Data updates (via edge function):**
-- Match `e1b40bf5`: set `winning_team = 'Rawalpindi Pindiz'`
-- Match `d4fefd70`: set `winning_team = 'Islamabad United'`
-- +5 to each winning team player's match points
-- Recalc all user_teams and profiles
-
+5. Expected outcome
+- Completed matches will have corrected player totals including missed fielding events.
+- User team totals will continue using proper C/VC multipliers.
+- The app will visibly distinguish base player points from captain/vice-captain adjusted totals.
+- Leaderboard and match views will finally align with the scoring rules users expect.
