@@ -23,6 +23,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
+
     const ensureProfile = async (userId: string, email: string | undefined) => {
       const { data } = await supabase.from('profiles').select('id').eq('user_id', userId).maybeSingle();
       if (!data) {
@@ -31,23 +33,44 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     };
 
+    // Timeout fallback: if auth doesn't resolve in 5s, stop loading
+    const authTimeout = setTimeout(() => {
+      if (isMounted && loading) {
+        console.warn('Auth session retrieval timed out');
+        setLoading(false);
+      }
+    }, 5000);
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setLoading(false);
+      clearTimeout(authTimeout);
       if (session?.user) {
         setTimeout(() => ensureProfile(session.user.id, session.user.email), 0);
       }
     });
 
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
-      if (session?.user) {
-        ensureProfile(session.user.id, session.user.email);
+      if (isMounted) {
+        setSession(session);
+        setLoading(false);
+        clearTimeout(authTimeout);
+        if (session?.user) {
+          ensureProfile(session.user.id, session.user.email);
+        }
+      }
+    }).catch(() => {
+      if (isMounted) {
+        setLoading(false);
+        clearTimeout(authTimeout);
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted = false;
+      clearTimeout(authTimeout);
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signOut = async () => {
