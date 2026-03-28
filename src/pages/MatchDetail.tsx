@@ -32,7 +32,7 @@ interface Player {
 const BUDGET_CUTOFF = new Date('2026-03-28T00:00:00Z');
 const getBudget = (matchDate?: string) => {
   if (!matchDate) return 100;
-  return new Date(matchDate) > BUDGET_CUTOFF ? 85 : 100;
+  return new Date(matchDate) > BUDGET_CUTOFF ? 90 : 100;
 };
 const MAX_PER_TEAM = 7;
 const ROLE_CONSTRAINTS: Record<PlayerRole, [number, number]> = {
