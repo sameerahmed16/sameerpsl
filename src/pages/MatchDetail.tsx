@@ -595,22 +595,26 @@ const MatchDetail = () => {
                 ))}
               </div>
               <div className="space-y-2">
-                {filteredPlayers.map(player => (
-                  <PlayerCard
-                    key={player.id}
-                    player={player}
-                    roleColors={ROLE_COLORS}
-                    selected={selected.has(player.id)}
-                    isCaptain={captain === player.id}
-                    isViceCaptain={viceCaptain === player.id}
-                    onSelect={() => {}}
-                    onCaptain={() => {}}
-                    onViceCaptain={() => {}}
-                    disabled={true}
-                    isLocked={true}
-                    showPoints={true}
-                  />
-                ))}
+                {filteredPlayers.map(player => {
+                  const mpPts = matchPointsMap.get(player.id);
+                  const displayPlayer = mpPts ? { ...player, points: mpPts.points } : player;
+                  return (
+                    <PlayerCard
+                      key={player.id}
+                      player={displayPlayer}
+                      roleColors={ROLE_COLORS}
+                      selected={selected.has(player.id)}
+                      isCaptain={captain === player.id}
+                      isViceCaptain={viceCaptain === player.id}
+                      onSelect={() => {}}
+                      onCaptain={() => {}}
+                      onViceCaptain={() => {}}
+                      disabled={true}
+                      isLocked={true}
+                      showPoints={true}
+                    />
+                  );
+                })}
               </div>
             </TabsContent>
 
