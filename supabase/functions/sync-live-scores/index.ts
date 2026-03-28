@@ -883,14 +883,16 @@ async function computePlayerPoints(
 
     if (!dbPlayer) continue;
 
-    let points = calculatePoints(ps);
+    const bd = calculatePointsWithBreakdown(ps);
+    let winBonus = 0;
+    let motmBonus = 0;
 
     // +5 bonus for winning team players
     if (scorecard.winningTeam && dbPlayer.team) {
       const playerTeam = dbPlayer.team.toLowerCase();
       const winTeam = scorecard.winningTeam.toLowerCase();
       if (playerTeam === winTeam || playerTeam.includes(winTeam) || winTeam.includes(playerTeam)) {
-        points += 5;
+        winBonus = 5;
       }
     }
 
@@ -898,13 +900,16 @@ async function computePlayerPoints(
     if (scorecard.playerOfTheMatch) {
       const motmNorm = normalizeName(scorecard.playerOfTheMatch);
       if (normalizedPs === motmNorm || normalizedPs.includes(motmNorm) || motmNorm.includes(normalizedPs)) {
-        points += 30;
+        motmBonus = 30;
         console.log(`MOTM bonus +30 applied to ${ps.name}`);
       }
     }
 
+    const totalPoints = bd.total + winBonus + motmBonus;
+    const breakdown = { ...bd, winning_bonus: winBonus, motm_bonus: motmBonus, total: totalPoints };
+
     await supabase.from("match_player_points").upsert(
-      { match_id: matchId, player_id: dbPlayer.id, points, data_source: scorecard.source },
+      { match_id: matchId, player_id: dbPlayer.id, points: totalPoints, data_source: scorecard.source, breakdown },
       { onConflict: "match_id,player_id" }
     );
 
@@ -912,8 +917,8 @@ async function computePlayerPoints(
       .from("match_player_points")
       .select("points")
       .eq("player_id", dbPlayer.id);
-    const totalPoints = (allMatchPoints || []).reduce((sum: number, row: any) => sum + (row.points || 0), 0);
-    await supabase.from("players").update({ points: totalPoints, is_playing: true }).eq("id", dbPlayer.id);
+    const totalGlobal = (allMatchPoints || []).reduce((sum: number, row: any) => sum + (row.points || 0), 0);
+    await supabase.from("players").update({ points: totalGlobal, is_playing: true }).eq("id", dbPlayer.id);
   }
 }
 
@@ -1297,6 +1302,8 @@ function mergePlayer(players: PlayerStats[], incoming: PlayerStats) {
       existing.maidens = (existing.maidens || 0) + (incoming.maidens || 0);
     }
     if (incoming.catches !== undefined) existing.catches = (existing.catches || 0) + (incoming.catches || 0);
+    if (incoming.directRunOuts !== undefined) existing.directRunOuts = (existing.directRunOuts || 0) + (incoming.directRunOuts || 0);
+    if (incoming.indirectRunOuts !== undefined) existing.indirectRunOuts = (existing.indirectRunOuts || 0) + (incoming.indirectRunOuts || 0);
     if (incoming.runOuts !== undefined) existing.runOuts = (existing.runOuts || 0) + (incoming.runOuts || 0);
     if (incoming.stumpings !== undefined) existing.stumpings = (existing.stumpings || 0) + (incoming.stumpings || 0);
   } else {
