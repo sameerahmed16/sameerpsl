@@ -23,7 +23,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Set up listener first
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         setSession(session);
@@ -31,15 +30,30 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     );
 
-    // Then check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-    }).catch((error) => {
-      console.error('Auth initialization error:', error);
-      setSession(null);
-    }).finally(() => {
-      setLoading(false);
-    });
+    const AUTH_TIMEOUT_MS = 5000;
+
+    const sessionPromise = supabase.auth.getSession();
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Auth session recovery timed out')), AUTH_TIMEOUT_MS)
+    );
+
+    Promise.race([sessionPromise, timeoutPromise])
+      .then(({ data: { session } }) => {
+        setSession(session);
+      })
+      .catch(async (error) => {
+        console.error('Auth initialization error:', error);
+        setSession(null);
+        try {
+          await supabase.auth.signOut({ scope: 'local' });
+          console.warn('Cleared stale local auth session');
+        } catch (cleanupErr) {
+          console.error('Local session cleanup failed:', cleanupErr);
+        }
+      })
+      .finally(() => {
+        setLoading(false);
+      });
 
     return () => {
       subscription.unsubscribe();
