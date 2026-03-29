@@ -1,63 +1,32 @@
 
-## Fix persistent startup loading caused by stale auth refresh
 
-### What I found
-- The previous auth fix is already present in `src/contexts/AuthContext.tsx` (`catch` + `finally` around `getSession()`).
-- Despite that, the app still gets stuck on the app-level `Loading...` screen because route guards in `src/App.tsx` still block both `/` and `/auth` while `loading === true`.
-- Network logs show repeated refresh-token requests returning `504 upstream request timeout` / `Failed to fetch`.
-- That means the real issue is no longer “missing error handling”; it is that auth session recovery can hang or retry long enough that the app never leaves the loading gate.
+## Add Player Aliases for Ahmad Daniyal and Farhan Yousuf
 
-### Root cause
-A stale/broken stored session is triggering refresh-token recovery during startup.  
-While that recovery is hanging/failing, `AuthProvider` keeps `loading` true, and both `ProtectedRoute` and `AuthRoute` render the full-screen loading state instead of letting the user reach `/auth`.
+### Problem
+Cricbuzz scorecards use different spellings than what's stored in the database:
+- **"Ahmed Daniyal"** on Cricbuzz vs **"Ahmad Daniyal"** in DB (player ID: `bb32a1f9-5967-4fc5-9598-83e5cc2f63b0`)
+- **"Farhan Yousaf"** on Cricbuzz vs **"Farhan Yousuf"** in DB (player ID: `07d7844f-361e-4af3-8553-6d2d4ba5ea87`)
 
-### Implementation plan
+This causes the scoring engine to skip these players during scorecard processing, so they have 0 match points.
 
-**1. Harden auth initialization against hanging refreshes**  
-Update `src/contexts/AuthContext.tsx` so startup auth recovery is bounded:
-- keep the current `onAuthStateChange + getSession` pattern
-- wrap session initialization in a small timeout/failsafe
-- if session recovery hangs or throws, treat the user as signed out
-- always resolve `loading` to `false`
+### Plan
 
-Recommended behavior:
-- start listener first
-- race `getSession()` against a short timeout
-- on timeout/error, clear only the local session state and proceed unauthenticated
+**Step 1 — Insert aliases via database migration**
 
-**2. Clear broken local auth state without relying on the network**  
-When startup recovery fails, call a local-only sign-out/cleanup path so the app stops retrying the same bad refresh token on every render/load.
-- local cleanup only
-- no aggressive storage hacks
-- no await inside `onAuthStateChange`
+Add two rows to the `player_aliases` table:
+- `alias: "Ahmed Daniyal"` → `player_id: bb32a1f9-...` (Ahmad Daniyal, Quetta)
+- `alias: "Farhan Yousaf"` → `player_id: 07d7844f-...` (Farhan Yousuf, Peshawar)
 
-This should let the app fall through to `/auth` immediately instead of staying on the loading overlay.
+**Step 2 — Trigger recalculation**
 
-**3. Keep route guards simple**
-`src/App.tsx` can stay mostly as-is once auth initialization reliably settles:
-- authenticated user → protected pages
-- unauthenticated user → `/auth`
-- loading shown only during a short, bounded startup window
+After aliases are in place, use the admin panel's "Recalculate from Cricbuzz" button on the affected matches:
+- Match 2: Quetta vs Karachi Kings (`6c7bb16f-...`) — Ahmad Daniyal played
+- Match 3: Peshawar vs Rawalpindi (`e1b40bf5-...`) — Farhan Yousaf played
+- Match 5: Quetta vs Hyderabad (`bf0ef35b-...`) — Ahmad Daniyal played
 
-**4. Add lightweight diagnostics**
-Keep a clear console log for:
-- auth init timeout
-- auth init failure
-- local session cleanup triggered
+This will re-scrape the scorecards and now correctly resolve the alias names to the right player IDs, populating their points.
 
-This will make future auth issues much easier to distinguish from page/query loading.
+### Files
+- One SQL migration to insert the two alias rows
+- No code changes needed — the alias resolution system already works
 
-### Files to update
-- `src/contexts/AuthContext.tsx`
-- possibly `src/App.tsx` only if a small guard/refactor is needed after auth readiness is separated from session state
-
-### Expected result
-- If refresh succeeds: user enters the app normally
-- If refresh token is stale/broken: app stops waiting, clears the bad local session, and routes to `/auth`
-- `/auth` becomes reachable again instead of being blocked behind infinite loading
-
-### Verification
-1. Load with a valid session → app opens normally  
-2. Load with a stale/broken session → app reaches `/auth` instead of hanging  
-3. Refresh several times after a failed auth recovery → no repeated infinite loading loop  
-4. Sign in again after fallback → normal navigation resumes, including `/admin/scores`
