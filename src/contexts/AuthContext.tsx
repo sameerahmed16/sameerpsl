@@ -34,6 +34,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Then check for existing session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
+    }).catch((error) => {
+      console.error('Auth initialization error:', error);
+      setSession(null);
+    }).finally(() => {
       setLoading(false);
     });
 
