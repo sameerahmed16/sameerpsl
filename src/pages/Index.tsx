@@ -18,7 +18,7 @@ const Index = () => {
   const autoSyncTriggered = useRef(false);
   const { user } = useAuth();
 
-  const { data: matches = [], isLoading } = useQuery({
+  const { data: matches = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['matches'],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -29,6 +29,7 @@ const Index = () => {
       return data;
     },
     refetchInterval: 30000,
+    retry: 3,
   });
 
   // Auto-sync on first load if no matches
