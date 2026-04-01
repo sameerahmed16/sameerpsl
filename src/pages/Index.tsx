@@ -111,6 +111,13 @@ const Index = () => {
                 <Loader2 className="w-6 h-6 text-primary animate-spin" />
                 <p className="text-muted-foreground text-sm">Loading matches...</p>
               </div>
+            ) : isError ? (
+              <div className="flex flex-col items-center gap-3 py-8">
+                <p className="text-muted-foreground text-sm">Couldn't load matches</p>
+                <Button variant="outline" size="sm" onClick={() => refetch()}>
+                  <RefreshCw className="w-4 h-4 mr-1" /> Retry
+                </Button>
+              </div>
             ) : activeTab === 'upcoming' ? (
               <>
                 {next48h.length > 0 && (
