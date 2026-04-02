@@ -312,7 +312,8 @@ async function tryCricAPI(
 async function tryCricbuzz(
   cricbuzzId: string,
   match: any,
-  supabase?: any
+  supabase?: any,
+  scoresOnly: boolean = false
 ): Promise<NormalizedScorecard | null> {
   try {
     if (!supabase) return null;
