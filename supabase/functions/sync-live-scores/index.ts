@@ -366,9 +366,9 @@ async function tryCricbuzz(
       return null;
     }
 
-    // ─── Fetch SCORECARD page for full player data ───
+    // ─── Fetch SCORECARD page for full player data (skip when scoresOnly) ───
     let scorecardPlayers: PlayerStats[] = [];
-    try {
+    if (!scoresOnly) {
       console.log(`Cricbuzz: fetching scorecard page for ID ${cricbuzzId}`);
       const { data: scHtml, error: scError } = await supabase.rpc("http_get_text", {
         target_url: `https://www.cricbuzz.com/live-cricket-scorecard/${cricbuzzId}`
